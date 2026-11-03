@@ -4,10 +4,12 @@ import glob
 import shutil
 import gdown
 import dash
-from dash import dcc, html, Input, Output
+from dash import dcc, html, Input, Output, dash_table
 import plotly.graph_objects as go
+import plotly.express as px
 import pandas as pd
 import numpy as np
+from sklearn.decomposition import PCA
 import dash_bootstrap_components as dbc
 
 # ==========================================
@@ -42,17 +44,30 @@ def preparar_dados():
 preparar_dados()
 
 # ==========================================
-# 1. FUNÇÕES AUXILIARES E CARREGAMENTO
+# 1. MAPEAMENTO E CARREGAMENTO DE DADOS
 # ==========================================
-
-MAPA_DATASET_MODELO = {
-    'breast_cancer': 'MLP_5L_BREAST_CANCER',
-    'wine_quality': 'MLP_5L_WINE_QUALITY',
-    'german_credit': 'MLP_5L_GERMAN_CREDIT'
+MAPA_DATASET = {
+    'breast_cancer': {
+        'arquivo_d6': 'projecao_tsne_epocas_breast_cancer.csv',
+        'arquivo_d3': 'explicacoes_instancias_breast_cancer.csv',
+        'label': 'Breast Cancer Wisconsin',
+        'modelo_id': 'MLP_5L_BREAST_CANCER'
+    },
+    'wine_quality': {
+        'arquivo_d6': 'projecao_tsne_epocas_wine_quality.csv',
+        'arquivo_d3': 'explicacoes_instancias_wine_quality.csv',
+        'label': 'Wine Quality (Red/White)',
+        'modelo_id': 'MLP_5L_WINE_QUALITY'
+    },
+    'german_credit': {
+        'arquivo_d6': 'projecao_tsne_epocas_german_credit.csv',
+        'arquivo_d3': 'explicacoes_instancias_german_credit.csv',
+        'label': 'German Credit (Cost Risk)',
+        'modelo_id': 'MLP_5L_GERMAN_CREDIT'
+    }
 }
 
 def Mapeamento_classes_dataset(dataset_name):
-    """Retorna os nomes das classes de acordo com o dataset selecionado."""
     if dataset_name == 'breast_cancer':
         return {0: "Benigno", 1: "Maligno"}
     elif dataset_name == 'wine_quality':
@@ -63,14 +78,12 @@ def Mapeamento_classes_dataset(dataset_name):
 
 def carregar_csv_seguro(nome_base, dataset_sel):
     padroes = [f"**/{nome_base}_{dataset_sel}.csv", f"**/{nome_base}.csv"]
-    
     for padrao in padroes:
         arquivos = glob.glob(padrao, recursive=True)
         if arquivos:
             try:
                 df = pd.read_csv(arquivos[0])
                 df.columns = df.columns.astype(str).str.replace('\ufeff', '').str.replace('ï»¿', '').str.strip().str.lower()
-                
                 if 'dataset_name' in df.columns:
                     df = df[df['dataset_name'].astype(str).str.strip().str.lower() == dataset_sel.lower()]
                 return df
@@ -79,11 +92,13 @@ def carregar_csv_seguro(nome_base, dataset_sel):
     return pd.DataFrame()
 
 def carregar_dados_sankey(dataset_sel):
+    info = MAPA_DATASET.get(dataset_sel, {})
     f_d2 = f"metricas_epocas_{dataset_sel}.csv"
-    f_d3 = f"explicacoes_instancias_{dataset_sel}.csv"
+    f_d3 = info.get('arquivo_d3', 'explicacoes_instancias.csv')
 
-    if not (os.path.exists(f_d2) and os.path.exists(f_d3)):
+    if not os.path.exists(f_d2):
         f_d2 = "metricas_epocas.csv"
+    if not os.path.exists(f_d3):
         f_d3 = "explicacoes_instancias.csv"
 
     try:
@@ -98,11 +113,9 @@ def carregar_dados_sankey(dataset_sel):
         print(f"[Aviso] Erro ao carregar arquivos ({dataset_sel}): {str(e)}")
         return pd.DataFrame(), pd.DataFrame()
 
-    modelo_alvo = MAPA_DATASET_MODELO.get(dataset_sel, 'MLP_5L_BREAST_CANCER')
-
+    modelo_alvo = info.get('modelo_id', 'MLP_5L_BREAST_CANCER')
     if not df_d3.empty and 'modelo_id' in df_d3.columns and (df_d3['modelo_id'] == modelo_alvo).any():
         df_d3 = df_d3[df_d3['modelo_id'] == modelo_alvo].copy()
-
     if not df_d2.empty and 'modelo_id' in df_d2.columns and (df_d2['modelo_id'] == modelo_alvo).any():
         df_d2 = df_d2[df_d2['modelo_id'] == modelo_alvo].copy()
 
@@ -169,7 +182,6 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
     metodos = [str(m) for m in df_inst_summary['metodo_xai'].unique()]
 
     transicoes = []
-
     for m in metodos:
         df_m = df_inst_summary[df_inst_summary['metodo_xai'] == m]
         for i in range(len(epocas) - 1):
@@ -219,11 +231,12 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
 
     return df_sankey, epocas
 
+
 # ==========================================
 # 2. INICIALIZAÇÃO DA APLICAÇÃO DASH
 # ==========================================
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
-server = app.server  # Obrigatório para o Gunicorn/Render
+server = app.server
 
 app.layout = html.Div([
     dbc.NavbarSimple(
@@ -255,9 +268,9 @@ app.layout = html.Div([
             dbc.Col([
                 html.Label("Método XAI:"),
                 dcc.Dropdown(id='dropdown-metodo', options=[], clearable=False)
-            ], width=4),
+            ], width=3),
             dbc.Col([
-                html.Label("Métrica Auxiliar (Estabilidade XAI):"),
+                html.Label("Métrica Auxiliar (Estabilidade):"),
                 dcc.Dropdown(
                     id='dropdown-metrica-estabilidade',
                     options=[
@@ -268,15 +281,7 @@ app.layout = html.Div([
                     value='spearman',
                     clearable=False
                 )
-            ], width=4),
-            dbc.Col([
-                html.Label("Filtro de Classe:"),
-                dcc.Dropdown(id='dropdown-classe', options=[], value='TODAS', clearable=False)
-            ], width=4),
-        ], className="my-3"),
-
-        # Filtro Adicional de Cor para o Sankey
-        dbc.Row([
+            ], width=3),
             dbc.Col([
                 html.Label("Mapeamento de Cores (Sankey):"),
                 dcc.Dropdown(
@@ -289,10 +294,14 @@ app.layout = html.Div([
                     value='classe',
                     clearable=False
                 )
-            ], width=6)
-        ], className="mb-3"),
+            ], width=3),
+            dbc.Col([
+                html.Label("Filtro de Classe:"),
+                dcc.Dropdown(id='dropdown-classe', options=[], value='TODAS', clearable=False)
+            ], width=3),
+        ], className="my-3"),
 
-        # Slider de Épocas
+        # Slider de Épocas Global
         dbc.Row([
             dbc.Col([
                 html.Label("Intervalo de Épocas (Brushing Temporal):"),
@@ -300,7 +309,19 @@ app.layout = html.Div([
             ], width=12)
         ], className="mb-4"),
 
-        # Linha 1: Performance + Estabilidade XAI e Heatmap
+        # ==========================================
+        # 1. SANKEY COMO A PRIMEIRA VISUALIZAÇÃO
+        # ==========================================
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Fluxos Temporais de Transição de Classe (Sankey Reativo ao XAI)"),
+                    dbc.CardBody([dcc.Graph(id='sankey-graph', style={'height': '600px'})])
+                ], className="shadow-sm mb-4")
+            ], width=12)
+        ]),
+
+        # Demais Visualizações Globais (Performance e Heatmap)
         dbc.Row([
             dbc.Col([
                 dbc.Card([
@@ -317,34 +338,102 @@ app.layout = html.Div([
             ], width=12, lg=6),
         ]),
 
-        # Linha 2: Redução de Dimensionalidade (t-SNE) e Auxiliar com Tooltips completos
+        # ==========================================
+        # 2. REDUÇÃO DE DIMENSIONALIDADE + PAINEL LATERAL COMBINADO
+        # ==========================================
         dbc.Row([
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Redução de Dimensionalidade Principal (t-SNE / Projeção Espacial)"),
-                    dbc.CardBody([dcc.Graph(id='tsne-graph')])
+                    dbc.CardHeader("Redução de Dimensionalidade Principal (t-SNE / PCA Espacial)"),
+                    dbc.CardBody([
+                        html.Div([
+                            html.Label("Época Específica (Redução de Dimensionalidade):", style={'fontSize': '12px', 'fontWeight': 'bold'}),
+                            dcc.Dropdown(id='dim-dropdown-epoca', options=[], clearable=False, style={'marginBottom': '10px'}),
+                            html.Label("Algoritmo:", style={'fontSize': '12px', 'fontWeight': 'bold'}),
+                            dcc.Dropdown(
+                                id='dim-dropdown-algo',
+                                options=[{'label': 't-SNE', 'value': 'TSNE'}, {'label': 'PCA', 'value': 'PCA'}],
+                                value='TSNE',
+                                clearable=False,
+                                style={'marginBottom': '10px'}
+                            ),
+                            html.Label("Colorir Pontos Por:", style={'fontSize': '12px', 'fontWeight': 'bold'}),
+                            dcc.Dropdown(
+                                id='dim-dropdown-cor',
+                                options=[
+                                    {'label': 'Classe Predita', 'value': 'classe_predita'},
+                                    {'label': 'Classe Real', 'value': 'classe_real'},
+                                    {'label': 'Erro de Predição', 'value': 'erro_predicao'}
+                                ],
+                                value='classe_predita',
+                                clearable=False,
+                                style={'marginBottom': '10px'}
+                            ),
+                            dcc.Checklist(
+                                id='dim-toggle-trajetoria',
+                                options=[{'label': ' Traçar Migração Temporal da Instância Clicada', 'value': 'ATIVO'}],
+                                value=[],
+                                style={'fontSize': '12px'}
+                            )
+                        ], style={'padding': '5px', 'backgroundColor': '#f1f3f5', 'borderRadius': '5px', 'marginBottom': '10px'}),
+                        dcc.Graph(
+                            id='dim-scatter-graph',
+                            style={'height': '500px'},
+                            config={'modeBarButtonsToAdd': ['drawrect', 'eraseshape']}
+                        )
+                    ])
                 ], className="shadow-sm mb-4")
-            ], width=12, lg=6),
+            ], width=12, lg=7),
 
+            # Painel Lateral Unificado: Perfil da Instância + Boxplot Auxiliar Temporal
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Análise Auxiliar de Dimensionalidade (Dispersão / Variação Temporal)"),
-                    dbc.CardBody([dcc.Graph(id='dim-reduction-aux-graph')])
+                    dbc.CardHeader("Inspeção Local & Variação Temporal"),
+                    dbc.CardBody([
+                        html.H6("Perfil da Instância Selecionada", style={'fontWeight': 'bold'}),
+                        html.Div(id='dim-info-instancia', children="Clique em um ponto para inspecionar os detalhes.", style={'fontSize': '13px', 'marginBottom': '10px'}),
+                        dcc.Graph(id='dim-local-xai-bar', style={'height': '220px'}),
+                        html.Hr(style={'margin': '10px 0'}),
+                        html.H6("Análise Auxiliar Temporal (Boxplot)", style={'fontWeight': 'bold'}),
+                        dcc.Graph(id='dim-reduction-aux-graph', style={'height': '240px'})
+                    ])
                 ], className="shadow-sm mb-4")
-            ], width=12, lg=6),
+            ], width=12, lg=5),
         ]),
 
-        # Linha 3: Sankey Binário Completo com Hover Detalhado do Notebook
+        # ==========================================
+        # 3. TABELA AUXILIAR ABAIXO DA REDUÇÃO DE DIMENSIONALIDADE
+        # ==========================================
         dbc.Row([
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Fluxos Temporais de Transição de Classe (Sankey Reativo ao XAI)"),
-                    dbc.CardBody([dcc.Graph(id='sankey-graph', style={'height': '680px'})])
+                    dbc.CardHeader("Tabela Auxiliar de Instâncias (Seleção por Brushing / Caixa no Gráfico 2D)"),
+                    dbc.CardBody([
+                        dash_table.DataTable(
+                            id='dim-tabela-instancias',
+                            columns=[
+                                {'name': 'Instância ID', 'id': 'instancia_id'},
+                                {'name': 'Época', 'id': 'epoca'},
+                                {'name': 'Método XAI', 'id': 'metodo_xai'},
+                                {'name': 'Classe Real', 'id': 'classe_real'},
+                                {'name': 'Classe Predita', 'id': 'classe_predita'},
+                                {'name': 'Erro Predição', 'id': 'erro_predicao'},
+                                {'name': 'Coord X', 'id': 'tsne_dim_1'},
+                                {'name': 'Coord Y', 'id': 'tsne_dim_2'}
+                            ],
+                            data=[],
+                            page_size=6,
+                            style_table={'overflowX': 'auto'},
+                            style_cell={'textAlign': 'left', 'fontFamily': 'sans-serif', 'fontSize': '12px'},
+                            style_header={'backgroundColor': '#f4f4f4', 'fontWeight': 'bold'}
+                        )
+                    ])
                 ], className="shadow-sm mb-4")
             ], width=12)
         ])
     ], fluid=True, style={'backgroundColor': '#f8f9fa', 'padding': '20px'})
 ])
+
 
 # ==========================================
 # 3. CALLBACKS DE ATUALIZAÇÃO
@@ -353,7 +442,8 @@ app.layout = html.Div([
 @app.callback(
     [Output('dropdown-metodo', 'options'),
      Output('dropdown-metodo', 'value'),
-     Output('dropdown-classe', 'options'),
+     Output('dim-dropdown-epoca', 'options'),
+     Output('dim-dropdown-epoca', 'value'),
      Output('slider-epocas', 'min'),
      Output('slider-epocas', 'max'),
      Output('slider-epocas', 'marks'),
@@ -371,47 +461,53 @@ def update_options(dataset_sel):
     if not df_d3.empty and 'epoca' in df_d3.columns:
         epocas = sorted([int(x) for x in df_d3['epoca'].dropna().unique()])
 
-    map_cls = Mapeamento_classes_dataset(dataset_sel)
     options_metodo = [{'label': str(m).upper(), 'value': m} for m in metodos]
     val_metodo = metodos[0] if metodos else 'SHAP'
     
-    options_classe = [
-        {'label': 'Todas as Classes', 'value': 'TODAS'},
-        {'label': f"Classe 0 ({map_cls[0]})", 'value': 0},
-        {'label': f"Classe 1 ({map_cls[1]})", 'value': 1}
-    ]
-    
+    opt_epocas = [{'label': f"Época {ep}", 'value': ep} for ep in epocas]
+    val_epoca = epocas[0] if epocas else 1
+
     min_ep = min(epocas) if epocas else 1
     max_ep = max(epocas) if epocas else 40
     marks_ep = {int(ep): f"Ép {ep}" for ep in epocas} if epocas else {1: "Ép 1"}
     
-    return options_metodo, val_metodo, options_classe, min_ep, max_ep, marks_ep, [min_ep, max_ep]
+    return options_metodo, val_metodo, opt_epocas, val_epoca, min_ep, max_ep, marks_ep, [min_ep, max_ep]
+
 
 @app.callback(
     [Output('metrics-stability-combined-graph', 'figure'),
      Output('heatmap-graph', 'figure'),
-     Output('tsne-graph', 'figure'),
+     Output('dim-scatter-graph', 'figure'),
      Output('dim-reduction-aux-graph', 'figure'),
+     Output('dim-info-instancia', 'children'),
+     Output('dim-local-xai-bar', 'figure'),
+     Output('dim-tabela-instancias', 'data'),
      Output('sankey-graph', 'figure')],
     [Input('dropdown-dataset', 'value'),
      Input('dropdown-metodo', 'value'),
      Input('dropdown-metrica-estabilidade', 'value'),
      Input('dropdown-cor-metrica', 'value'),
      Input('dropdown-classe', 'value'),
-     Input('slider-epocas', 'value')]
+     Input('slider-epocas', 'value'),
+     Input('dim-dropdown-epoca', 'value'),
+     Input('dim-dropdown-algo', 'value'),
+     Input('dim-dropdown-cor', 'value'),
+     Input('dim-toggle-trajetoria', 'value'),
+     Input('dim-scatter-graph', 'clickData'),
+     Input('dim-scatter-graph', 'selectedData')]
 )
-def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_metrica_sel, classe_sel, epocas_sel):
+def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, classe_sel, epocas_sel, epoca_proj_sel, algo_sel, cor_proj_sel, trajetoria_sel, clickData, selectedData):
+    # Carregamento seguro dos dados
     df_d2 = carregar_csv_seguro("metricas_epocas", dataset_sel)
     df_d4 = carregar_csv_seguro("resumo_explicacoes", dataset_sel)
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
     df_d5 = carregar_csv_seguro("metricas_estabilidade_concordancia", dataset_sel)
-    df_d3, _ = carregar_dados_sankey(dataset_sel)
+    df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
+    label_ds = MAPA_DATASET.get(dataset_sel, {}).get('label', dataset_sel.upper())
 
     # 1. Performance + Estabilidade XAI
     fig_combined = go.Figure()
-    if df_d2.empty:
-        fig_combined.add_annotation(text="Dados de métricas de treino não encontrados.", showarrow=False)
-    else:
+    if not df_d2.empty:
         acc_col = 'accuracy' if 'accuracy' in df_d2.columns else (df_d2.columns[1] if len(df_d2.columns) > 1 else None)
         loss_col = 'loss_validacao' if 'loss_validacao' in df_d2.columns else None
         
@@ -431,22 +527,17 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_metrica_sel, cla
                     mode='lines+markers', name=f'Estabilidade ({metrica_est_sel})',
                     line=dict(color='#1f77b4', dash='dash')
                 ))
+    fig_combined.update_layout(
+        title=f"Performance do Modelo & Estabilidade XAI ({metodo_sel})",
+        yaxis=dict(title="Acurácia / Estabilidade"),
+        yaxis2=dict(title="Loss", overlaying='y', side='right', showgrid=False),
+        margin=dict(t=30, b=30, l=40, r=40),
+        legend=dict(x=0.01, y=0.99, orientation='h')
+    )
 
-        fig_combined.update_layout(
-            title=f"Performance do Modelo & Estabilidade XAI ({metodo_sel})",
-            yaxis=dict(title="Acurácia / Estabilidade"),
-            yaxis2=dict(title="Loss", overlaying='y', side='right', showgrid=False),
-            margin=dict(t=30, b=30, l=40, r=40),
-            legend=dict(x=0.01, y=0.99, orientation='h')
-        )
-
-    # 2. Heatmap com Tooltips Interativos
+    # 2. Heatmap
     fig_heat = go.Figure()
-    if df_d4.empty:
-        fig_heat.add_annotation(text="Arquivo CSV de resumo_explicacoes não encontrado.", showarrow=False)
-    elif 'metodo_xai' not in df_d4.columns or 'feature' not in df_d4.columns or 'epoca' not in df_d4.columns:
-        fig_heat.add_annotation(text="Colunas XAI/feature/epoca ausentes.", showarrow=False)
-    else:
+    if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
         if not df_h_sub.empty:
             val_col = 'importancia_media' if 'importancia_media' in df_h_sub.columns else df_h_sub.columns[-1]
@@ -457,54 +548,148 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_metrica_sel, cla
             ))
             fig_heat.update_layout(title=f"Heatmap de Importância ({metodo_sel})", margin=dict(t=30, b=30, l=50, r=20))
 
-    # 3. Projeção t-SNE com Tooltips Detalhados no Mouseover
+    # 3. Redução de Dimensionalidade (t-SNE / PCA)
     fig_tsne = go.Figure()
-    if df_d6.empty:
-        fig_tsne.add_annotation(text="Arquivo CSV de projecao_tsne não encontrado.", showarrow=False)
-    elif 'metodo_xai' not in df_d6.columns or 'tsne_dim_1' not in df_d6.columns:
-        fig_tsne.add_annotation(text="Colunas t-SNE ausentes.", showarrow=False)
-    else:
-        df_t_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
-        if epocas_sel and 'epoca' in df_t_sub.columns:
-            df_t_sub = df_t_sub[(df_t_sub['epoca'] >= epocas_sel[0]) & (df_t_sub['epoca'] <= epocas_sel[1])]
-        
-        if not df_t_sub.empty:
-            color_col = 'classe_predita' if 'classe_predita' in df_t_sub.columns else ('cluster_id' if 'cluster_id' in df_t_sub.columns else df_t_sub.columns[-1])
-            id_inst = 'instancia_id' if 'instancia_id' in df_t_sub.columns else ('instance_id' if 'instance_id' in df_t_sub.columns else 'epoca')
-            
-            fig_tsne = go.Figure(data=go.Scatter(
-                x=df_t_sub['tsne_dim_1'], y=df_t_sub['tsne_dim_2'],
-                mode='markers',
-                marker=dict(color=df_t_sub[color_col], colorscale='Plasma', opacity=0.8, size=8),
-                text=df_t_sub[id_inst],
-                customdata=df_t_sub[['epoca', color_col]],
-                hovertemplate='Instância ID: %{text}<br>Época: %{customdata[0]}<br>Classe Predita: %{customdata[1]}<br>t-SNE 1: %{x:.2f}<br>t-SNE 2: %{y:.2f}<extra></extra>'
-            ))
-            fig_tsne.update_layout(title=f"Projeção t-SNE Espacial ({metodo_sel})", margin=dict(t=30, b=30, l=30, r=20))
+    tabela_records = []
+    info_html = "Clique em um ponto para inspecionar os detalhes."
+    fig_xai_local = go.Figure()
+    instancia_clicada_id = None
 
-    # 4. Auxiliar de Dimensionalidade
+    if not df_d6.empty:
+        epoca_alvo = epoca_proj_sel if epoca_proj_sel else (df_d6['epoca'].min() if 'epoca' in df_d6.columns else 1)
+        df_sub = df_d6[
+            (df_d6['metodo_xai'] == metodo_sel) &
+            (df_d6['epoca'] == epoca_alvo)
+        ].copy()
+
+        if not df_sub.empty:
+            if algo_sel == 'PCA' and not df_d3.empty:
+                df_exp_ep = df_d3[(df_d3['metodo_xai'] == metodo_sel) & (df_d3['epoca'] == epoca_alvo)]
+                if not df_exp_ep.empty:
+                    pivot_pca = df_exp_ep.pivot_table(index='instancia_id', columns='feature', values='valor_atribuicao').fillna(0)
+                    pca = PCA(n_components=2)
+                    res_pca = pca.fit_transform(pivot_pca.values)
+                    pca_df = pd.DataFrame(res_pca, index=pivot_pca.index, columns=['dim_1', 'dim_2']).reset_index()
+                    df_sub = df_sub.merge(pca_df, on='instancia_id', how='left')
+                    x_col, y_col = 'dim_1', 'dim_2'
+                else:
+                    x_col, y_col = 'tsne_dim_1', 'tsne_dim_2'
+            else:
+                x_col, y_col = 'tsne_dim_1', 'tsne_dim_2'
+
+            if clickData and 'points' in clickData and len(clickData['points']) > 0:
+                instancia_clicada_id = clickData['points'][0]['customdata'][0]
+
+            if cor_proj_sel == 'erro_predicao':
+                df_sub['cor_label'] = df_sub['erro_predicao'].map({0: 'Acerto', 1: 'Erro'})
+                fig_tsne = px.scatter(
+                    df_sub, x=x_col, y=y_col, color='cor_label',
+                    color_discrete_map={'Acerto': '#2ca02c', 'Erro': '#d62728'},
+                    custom_data=['instancia_id', 'classe_real', 'classe_predita', 'erro_predicao']
+                )
+            else:
+                fig_tsne = px.scatter(
+                    df_sub, x=x_col, y=y_col, color=cor_proj_sel, color_continuous_scale='Viridis',
+                    custom_data=['instancia_id', 'classe_real', 'classe_predita', 'erro_predicao']
+                )
+
+            fig_tsne.update_traces(
+                marker=dict(size=9, opacity=0.8, line=dict(width=0.5, color='black')),
+                hovertemplate=(
+                    "<b>Instância ID:</b> #%{customdata[0]}<br>"
+                    "<b>Classe Real:</b> %{customdata[1]}<br>"
+                    "<b>Classe Predita:</b> %{customdata[2]}<br>"
+                    "<b>Erro:</b> %{customdata[3]}<br>"
+                    "<b>X:</b> %{x:.3f} | <b>Y:</b> %{y:.3f}<extra></extra>"
+                )
+            )
+
+            if 'ATIVO' in trajetoria_sel and instancia_clicada_id is not None:
+                df_traj = df_d6[
+                    (df_d6['metodo_xai'] == metodo_sel) &
+                    (df_d6['instancia_id'] == instancia_clicada_id)
+                ].sort_values('epoca')
+                fig_tsne.add_trace(go.Scatter(
+                    x=df_traj['tsne_dim_1'], y=df_traj['tsne_dim_2'],
+                    mode='lines+markers+text', text=[f"E{ep}" for ep in df_traj['epoca']],
+                    textposition="top center", line=dict(color='orange', width=3, dash='dash'),
+                    marker=dict(size=12, color='orange', symbol='diamond'), name=f'Trajetória ID #{instancia_clicada_id}'
+                ))
+
+            if instancia_clicada_id is not None:
+                ponto_clicado = df_sub[df_sub['instancia_id'] == instancia_clicada_id]
+                if not ponto_clicado.empty:
+                    fig_tsne.add_trace(go.Scatter(
+                        x=ponto_clicado[x_col], y=ponto_clicado[y_col], mode='markers',
+                        marker=dict(size=18, color='rgba(0,0,0,0)', line=dict(color='yellow', width=3)),
+                        showlegend=False, hoverinfo='skip'
+                    ))
+
+            fig_tsne.update_layout(
+                title=f"Espaço 2D ({algo_sel}) - Época {epoca_alvo} ({metodo_sel}) - {label_ds}",
+                xaxis_title=f"{algo_sel} Dim 1", yaxis_title=f"{algo_sel} Dim 2",
+                margin=dict(l=20, r=20, t=40, b=20)
+            )
+
+            # Painel Lateral: Perfil Instância e XAI Local
+            if instancia_clicada_id is not None:
+                row_inst = df_sub[df_sub['instancia_id'] == instancia_clicada_id]
+                if not row_inst.empty:
+                    c_real = row_inst['classe_real'].values[0]
+                    c_pred = row_inst['classe_predita'].values[0]
+                    err = row_inst['erro_predicao'].values[0]
+                    info_html = html.Div([
+                        html.P([html.B("ID: "), f"#{instancia_clicada_id} | ", html.B("Época: "), f"{epoca_alvo}"], style={'margin': '2px'}),
+                        html.P([html.B("Classe Real: "), f"{c_real} | ", html.B("Predita: "), f"{c_pred}"], style={'margin': '2px'}),
+                        html.P([html.B("Status: "), html.Span("ERRO", style={'color': 'red', 'fontWeight': 'bold'}) if err == 1 else html.Span("ACERTO", style={'color': 'green', 'fontWeight': 'bold'})], style={'margin': '2px'})
+                    ])
+
+            if not df_d3.empty and instancia_clicada_id is not None:
+                df_local_feat = df_d3[
+                    (df_d3['metodo_xai'] == metodo_sel) &
+                    (df_d3['epoca'] == epoca_alvo) &
+                    (df_d3['instancia_id'] == instancia_clicada_id)
+                ].sort_values('valor_atribuicao', key=abs, ascending=True).tail(8)
+
+                if not df_local_feat.empty:
+                    colors_bar = ['#d62728' if v < 0 else '#1f77b4' for v in df_local_feat['valor_atribuicao']]
+                    fig_xai_local.add_trace(go.Bar(
+                        x=df_local_feat['valor_atribuicao'], y=df_local_feat['feature'],
+                        orientation='h', marker_color=colors_bar
+                    ))
+                    fig_xai_local.update_layout(
+                        title=f"Top Features ({metodo_sel})",
+                        xaxis_title="Atribuição", yaxis_title="",
+                        margin=dict(l=10, r=10, t=30, b=10)
+                    )
+
+            # Tabela Auxiliar Brushing
+            if selectedData and 'points' in selectedData:
+                selected_ids = [p['customdata'][0] for p in selectedData['points'] if 'customdata' in p]
+                df_tabela = df_sub[df_sub['instancia_id'].isin(selected_ids)]
+            else:
+                df_tabela = df_sub
+            tabela_records = df_tabela.to_dict('records')
+
+    # 4. Boxplot Auxiliar Temporal (Variação da Componente Principal)
     fig_dim_aux = go.Figure()
-    if df_d6.empty or 'tsne_dim_1' not in df_d6.columns:
-        fig_dim_aux.add_annotation(text="Dados de projeção de dimensionalidade não disponíveis.", showarrow=False)
-    else:
+    if not df_d6.empty and 'tsne_dim_1' in df_d6.columns:
         df_aux_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
         if not df_aux_sub.empty and 'epoca' in df_aux_sub.columns:
             fig_dim_aux = go.Figure(data=go.Box(
                 x=df_aux_sub['epoca'], y=df_aux_sub['tsne_dim_1'],
-                name="Dimensão 1 (t-SNE)", marker_color='#9467bd'
+                name="Dim 1 (t-SNE)", marker_color='#9467bd'
             ))
-            fig_dim_aux.update_layout(title=f"Dispersão da Componente Principal por Época ({metodo_sel})", margin=dict(t=30, b=30, l=40, r=20))
+            fig_dim_aux.update_layout(title="Dispersão Temporal (t-SNE Dim 1)", margin=dict(l=20, r=20, t=30, b=20))
 
-    # 5. Fluxos Temporais (SANKEY REATIVO COM O HOVER COMPLETO DO NOTEBOOK)
+    # 5. Fluxos Temporais (Sankey na Primeira Posição)
     fig_sankey = go.Figure()
-    df_sankey_processed, _ = processar_dados_sankey(df_d3, df_d2, dataset_sel)
+    df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
+    df_sankey_processed, _ = processar_dados_sankey(df_d3_sankey, df_d2_sankey, dataset_sel)
 
-    if df_sankey_processed.empty:
-        fig_sankey.add_annotation(text="Dados de transições não encontrados para o Sankey.", showarrow=False)
-    else:
+    if not df_sankey_processed.empty:
         metodos_validos = df_sankey_processed['metodo_xai'].unique()
         m_alvo = metodo_sel if metodo_sel in metodos_validos else metodos_validos[0]
-
         df_filtered = df_sankey_processed[df_sankey_processed['metodo_xai'] == m_alvo].copy()
 
         if epocas_sel:
@@ -512,15 +697,11 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_metrica_sel, cla
                 (df_filtered['epoca_origem'] >= epocas_sel[0]) &
                 (df_filtered['epoca_destino'] <= epocas_sel[1])
             ]
-
         if classe_sel is not None and classe_sel != 'TODAS':
             df_filtered = df_filtered[df_filtered['classe_origem'] == int(classe_sel)]
 
-        if df_filtered.empty:
-            fig_sankey.add_annotation(text=f"Sem dados para os filtros selecionados no Sankey.", showarrow=False)
-        else:
+        if not df_filtered.empty:
             map_cls = Mapeamento_classes_dataset(dataset_sel)
-
             epocas_unicas = sorted(list(set(df_filtered['epoca_origem']).union(set(df_filtered['epoca_destino']))))
             classes_unicas = [0, 1]
 
@@ -533,15 +714,12 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_metrica_sel, cla
                     node_dict[f"E{ep}_C{cl}"] = node_id
                     nome_classe = map_cls.get(cl, f"Classe {cl}")
                     node_labels.append(f"Época {ep}<br>{nome_classe}")
-
                     x_pos = 0.05 + 0.9 * (i_ep / max(1, len(epocas_unicas) - 1))
                     y_pos = 0.2 if cl == 0 else 0.8
-
                     node_x.append(x_pos)
                     node_y.append(y_pos)
 
             sources, targets, values, link_colors, hover_texts = [], [], [], [], []
-
             for _, row in df_filtered.iterrows():
                 src_key = f"E{row['epoca_origem']}_C{row['classe_origem']}"
                 tgt_key = f"E{row['epoca_destino']}_C{row['classe_destino']}"
@@ -549,16 +727,15 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_metrica_sel, cla
                 if src_key in node_dict and tgt_key in node_dict:
                     sources.append(node_dict[src_key])
                     targets.append(node_dict[tgt_key])
-
                     val_fluxo = int(row['qtd_instancias'])
                     values.append(val_fluxo)
 
                     conf = float(row['confianca_media'])
                     alpha = max(0.30, min(0.85, conf))
 
-                    if cor_metrica_sel == 'classe':
+                    if cor_sankey_sel == 'classe':
                         base_rgb = "31, 119, 180" if row['classe_origem'] == 0 else "255, 127, 14"
-                    elif cor_metrica_sel == 'confianca':
+                    elif cor_sankey_sel == 'confianca':
                         base_rgb = f"{int(255*(1-conf))}, {int(200*conf)}, 150"
                     else:
                         err = float(row['taxa_erro'])
@@ -582,32 +759,16 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_metrica_sel, cla
 
             fig_sankey = go.Figure(data=[go.Sankey(
                 arrangement="snap",
-                node=dict(
-                    pad=30,
-                    thickness=20,
-                    line=dict(color="black", width=0.5),
-                    label=node_labels,
-                    x=node_x,
-                    y=node_y,
-                    color="lightgray"
-                ),
-                link=dict(
-                    source=sources,
-                    target=targets,
-                    value=values,
-                    color=link_colors,
-                    customdata=hover_texts,
-                    hovertemplate="%{customdata}<extra></extra>"
-                )
+                node=dict(pad=30, thickness=20, line=dict(color="black", width=0.5), label=node_labels, x=node_x, y=node_y, color="lightgray"),
+                link=dict(source=sources, target=targets, value=values, color=link_colors, customdata=hover_texts, hovertemplate="%{customdata}<extra></extra>")
             )])
-
             fig_sankey.update_layout(
                 title_text=f"Transições Temporais de Explicações ({m_alvo}) - Dataset: {dataset_sel.upper()}",
-                font_size=12,
-                margin=dict(l=20, r=20, t=50, b=20)
+                font_size=12, margin=dict(l=20, r=20, t=50, b=20)
             )
 
-    return fig_combined, fig_heat, fig_tsne, fig_dim_aux, fig_sankey
+    return fig_combined, fig_heat, fig_tsne, fig_dim_aux, info_html, fig_xai_local, tabela_records, fig_sankey
+
 
 if __name__ == '__main__':
     app.run(debug=False)
