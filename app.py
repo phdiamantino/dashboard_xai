@@ -41,7 +41,7 @@ def preparar_dados():
 preparar_dados()
 
 # ==========================================
-# 1. FUNÇÕES DE CARREGAMENTO ULTRA-SEGURO
+# 1. FUNÇÕES DE CARREGAMENTO ULTRA-SEGURO E MAPEAMENTO
 # ==========================================
 def carregar_csv_seguro(nome_base, dataset_sel):
     padroes = [f"**/{nome_base}_{dataset_sel}.csv", f"**/{nome_base}.csv"]
@@ -61,6 +61,7 @@ def carregar_csv_seguro(nome_base, dataset_sel):
     return pd.DataFrame()
 
 def Mapeamento_classes_dataset(dataset_name):
+    # Dicionário alinhado perfeitamente às propriedades dos 3 Datasets
     if dataset_name == 'breast_cancer':
         return {0: "Benigno", 1: "Maligno"}
     elif dataset_name == 'wine_quality':
@@ -87,13 +88,13 @@ app.layout = html.Div([
                 dcc.Dropdown(
                     id='dropdown-dataset',
                     options=[
-                        {'label': 'Breast Cancer', 'value': 'breast_cancer'},
-                        {'label': 'Wine Quality', 'value': 'wine_quality'},
-                        {'label': 'German Credit', 'value': 'german_credit'}
+                        {'label': 'Breast Cancer Wisconsin', 'value': 'breast_cancer'},
+                        {'label': 'Wine Quality (Red/White)', 'value': 'wine_quality'},
+                        {'label': 'German Credit (Cost Risk)', 'value': 'german_credit'}
                     ],
                     value='breast_cancer',
                     clearable=False,
-                    style={'width': '200px'}
+                    style={'width': '250px'}
                 )
             ], style={'display': 'flex', 'alignItems': 'center'})
         ]
@@ -167,11 +168,11 @@ app.layout = html.Div([
             ], width=12, lg=6),
         ]),
 
-        # Linha 3: Sankey Dinâmico
+        # Linha 3: Sankey Fidedigno e Dinâmico
         dbc.Row([
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Fluxos Temporais de Transições de Classe (Sankey Reativo XAI)"),
+                    dbc.CardHeader("Fluxos Temporais de Transições (Sankey Reativo ao Método XAI)"),
                     dbc.CardBody([dcc.Graph(id='sankey-graph', style={'height': '600px'})])
                 ], className="shadow-sm mb-4")
             ], width=12)
@@ -237,7 +238,6 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
     df_d4 = carregar_csv_seguro("resumo_explicacoes", dataset_sel)
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
     df_d5 = carregar_csv_seguro("metricas_estabilidade_concordancia", dataset_sel)
-    df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
 
     # 1. Performance + Estabilidade XAI
     fig_combined = go.Figure()
@@ -314,40 +314,26 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             ))
             fig_dim_aux.update_layout(title=f"Dispersão da Componente Principal por Época ({metodo_sel})", margin=dict(t=30, b=30, l=40, r=20))
 
-    # 5. Fluxos Temporais (SANKEY REATIVO COM ATRIBUIÇÃO XAI E OPACIDADE)
+    # 5. Fluxos Temporais (SANKEY REATIVO COM OPACIDADE, CORES E BASEADO NO NOTEBOOK COLAB)
     fig_sankey = go.Figure()
-    if df_d3.empty or df_d6.empty:
-        fig_sankey.add_annotation(text="Dados de explicações/projeções não encontrados.", showarrow=False)
+    if df_d6.empty:
+        fig_sankey.add_annotation(text="Dados de projeções não encontrados.", showarrow=False)
     else:
-        id_col = next((c for c in ['instancia_id', 'instance_id', 'id', 'sample_id'] if c in df_d3.columns), None)
         id_col_d6 = next((c for c in ['instancia_id', 'instance_id', 'id', 'sample_id'] if c in df_d6.columns), None)
-        
-        df_d3_met = df_d3[df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
         df_d6_met = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
 
-        if not df_d3_met.empty and not df_d6_met.empty and id_col and id_col_d6:
-            # Agrupa o perfil atributivo total do Método XAI por instância e época
-            df_xai_profile = df_d3_met.groupby(['epoca', id_col])['valor_atribuicao'].mean().reset_index()
+        if not df_d6_met.empty and id_col_d6:
+            # O SEGREDO DO NOTEBOOK: Se a clusterização das explicações existir, ele muda com o método.
+            # Caso não haja cluster_id explícito, ele usa a classe predita, mantendo a coerência.
+            target_col = 'cluster_id' if 'cluster_id' in df_d6_met.columns else 'classe_predita'
             
-            cols_d6 = ['epoca', id_col_d6, 'classe_predita']
+            cols_d6 = ['epoca', id_col_d6, target_col]
             if 'classe_real' in df_d6_met.columns:
                 cols_d6.append('classe_real')
                 
-            df_sankey_base = pd.merge(
-                df_xai_profile,
-                df_d6_met[cols_d6].drop_duplicates(),
-                left_on=['epoca', id_col],
-                right_on=['epoca', id_col_d6],
-                how='inner'
-            )
+            df_sankey_base = df_d6_met[cols_d6].drop_duplicates()
 
-            # Categoriza por decis/faixas de atribuição do Método XAI para garantir variação entre métodos
-            try:
-                df_sankey_base['faixa_xai'] = pd.qcut(df_sankey_base['valor_atribuicao'], q=2, labels=[0, 1], duplicates='drop')
-                df_sankey_base['grupo_sankey'] = df_sankey_base['classe_predita'].astype(str) + "_" + df_sankey_base['faixa_xai'].astype(str)
-            except Exception:
-                df_sankey_base['grupo_sankey'] = df_sankey_base['classe_predita']
-
+            # Filtro interativo de Classe Global
             if classe_sel != 'TODAS' and 'classe_real' in df_sankey_base.columns:
                 try:
                     df_sankey_base = df_sankey_base[df_sankey_base['classe_real'] == int(classe_sel)]
@@ -368,18 +354,17 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                 node_map = {}
                 map_cls = Mapeamento_classes_dataset(dataset_sel)
 
-                # Mapeamento de cores vibrantes com opacidade nos links
+                # Cores vibrantes com opacidade (rgba) fiéis à imagem anexada
                 class_color_map = {
-                    0: {'node': '#1f77b4', 'link': 'rgba(31, 119, 180, 0.45)'},
-                    1: {'node': '#ff7f0e', 'link': 'rgba(255, 127, 14, 0.45)'},
-                    2: {'node': '#2ca02c', 'link': 'rgba(44, 160, 44, 0.45)'},
-                    3: {'node': '#d62728', 'link': 'rgba(214, 39, 40, 0.45)'}
+                    0: {'node': '#1f77b4', 'link': 'rgba(31, 119, 180, 0.45)'}, # Azul (Benigno / Baixo Risco)
+                    1: {'node': '#ff7f0e', 'link': 'rgba(255, 127, 14, 0.45)'}, # Laranja (Maligno / Alto Risco)
+                    2: {'node': '#2ca02c', 'link': 'rgba(44, 160, 44, 0.45)'},  # Verde
+                    3: {'node': '#d62728', 'link': 'rgba(214, 39, 40, 0.45)'}   # Vermelho
                 }
 
-                target_col = 'classe_predita'
-
+                # Construção dos Nós
                 for ep in epocas_disponiveis:
-                    grupos = sorted(df_sankey_base[df_sankey_base['epoca'] == ep][target_col].unique())
+                    grupos = sorted(df_sankey_base[df_sankey_base['epoca'] == ep][target_col].dropna().unique())
                     for g in grupos:
                         try:
                             g_int = int(g)
@@ -395,12 +380,13 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                         c_info = class_color_map.get(g_int, {'node': '#1f77b4', 'link': 'rgba(31, 119, 180, 0.45)'})
                         node_colors.append(c_info['node'])
 
+                # Construção das Conexões (Links)
                 for i in range(len(epocas_disponiveis) - 1):
                     ep1, ep2 = epocas_disponiveis[i], epocas_disponiveis[i+1]
-                    df_e1 = df_sankey_base[df_sankey_base['epoca'] == ep1][[id_col, target_col]]
-                    df_e2 = df_sankey_base[df_sankey_base['epoca'] == ep2][[id_col, target_col]]
+                    df_e1 = df_sankey_base[df_sankey_base['epoca'] == ep1][[id_col_d6, target_col]]
+                    df_e2 = df_sankey_base[df_sankey_base['epoca'] == ep2][[id_col_d6, target_col]]
 
-                    merged = pd.merge(df_e1, df_e2, on=id_col, suffixes=('_src', '_tgt'))
+                    merged = pd.merge(df_e1, df_e2, on=id_col_d6, suffixes=('_src', '_tgt'))
                     trans = merged.groupby([f'{target_col}_src', f'{target_col}_tgt']).size().reset_index(name='count')
 
                     for _, row in trans.iterrows():
@@ -438,8 +424,9 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                             color=link_colors
                         )
                     )])
+                    
                     fig_sankey.update_layout(
-                        title=f"Fluxos Temporais de Transição de Classe ({metodo_sel.upper()})",
+                        title=f"Fluxos Temporais de Transição ({metodo_sel.upper()})",
                         font=dict(size=12, color="black"),
                         margin=dict(t=40, b=30, l=30, r=30)
                     )
