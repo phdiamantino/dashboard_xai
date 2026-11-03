@@ -1,74 +1,72 @@
 import os
 import zipfile
 import requests
-import shutil
+import glob
 import dash
 from dash import dcc, html, Input, Output
 import plotly.graph_objects as go
 import pandas as pd
-import numpy as np
 import dash_bootstrap_components as dbc
 
 # ==========================================
-# 0. DOWNLOAD E EXTRAÇÃO AUTOMÁTICA DOS CSVs
+# 0. DOWNLOAD ROBUSTO DO GOOGLE DRIVE (IGNORA AVISO DE TAMANHO)
 # ==========================================
-URL_GOOGLE_DRIVE_ZIP = "https://drive.google.com/uc?export=download&confirm=t&id=16E8yydOSbV6RwlhVPW5in_lIQr7CcjZm"
+DRIVE_FILE_ID = "16E8yydOSbV6RwlhVPW5in_lIQr7CcjZm"
 
-def baixar_e_descompactar_dados():
-    # Verifica se um dos arquivos essenciais já existe na raiz
-    if not os.path.exists("metricas_epocas_breast_cancer.csv") and not os.path.exists("metricas_epocas.csv"):
-        print("[Início] Baixando arquivos de dados do Google Drive...")
-        try:
-            response = requests.get(URL_GOOGLE_DRIVE_ZIP, stream=True)
-            zip_path = "dados_xai.zip"
-            with open(zip_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
+def baixar_drive_robusto(file_id, destination):
+    URL = "https://docs.google.com/uc?export=download"
+    session = requests.Session()
+    response = session.get(URL, params={'id': file_id}, stream=True)
+    
+    # Extrai o token de confirmação da página de aviso (necessário para arquivos pesados)
+    token = None
+    for key, value in response.cookies.items():
+        if key.startswith('download_warning'):
+            token = value
+            break
             
+    if token:
+        params = {'id': file_id, 'confirm': token}
+        response = session.get(URL, params=params, stream=True)
+        
+    with open(destination, "wb") as f:
+        for chunk in response.iter_content(32768):
+            if chunk:
+                f.write(chunk)
+
+def preparar_dados():
+    # Usa glob para ver se já temos algum CSV de métricas em qualquer subpasta
+    if not glob.glob("**/*metricas_epocas*.csv", recursive=True):
+        print("[Início] Baixando ZIP do Google Drive...")
+        try:
+            zip_path = "dados_xai.zip"
+            baixar_drive_robusto(DRIVE_FILE_ID, zip_path)
+            
+            print("[Extraindo] Descompactando arquivos...")
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(".")
-            
-            # Move todos os CSVs encontrados em subpastas para a raiz
-            for root, dirs, files in os.walk("."):
-                for file in files:
-                    if file.endswith(".csv"):
-                        src_path = os.path.join(root, file)
-                        dst_path = file
-                        if src_path != dst_path and not os.path.exists(dst_path):
-                            shutil.move(src_path, dst_path)
-                            
-            print("[Sucesso] Dados baixados e organizados na raiz com sucesso!")
+            print("[Sucesso] Dados prontos para leitura!")
         except Exception as e:
-            print(f"[Erro] Falha ao baixar dados do Drive: {e}")
+            print(f"[Erro] Falha no download ou extração: {e}")
 
-baixar_e_descompactar_dados()
+preparar_dados()
 
 # ==========================================
-# 1. FUNÇÕES DE CARREGAMENTO ROBUSTO
+# 1. FUNÇÕES DE CARREGAMENTO ROBUSTO (BUSCA RECURSIVA)
 # ==========================================
-
 def carregar_csv_seguro(nome_base, dataset_sel):
-    """
-    Tenta carregar o arquivo específico do dataset (ex: metricas_epocas_breast_cancer.csv).
-    Se não encontrar, tenta o arquivo genérico (ex: metricas_epocas.csv).
-    """
-    caminhos = [
-        f"{nome_base}_{dataset_sel}.csv",
-        f"{nome_base}.csv"
-    ]
+    padroes = [f"**/{nome_base}_{dataset_sel}.csv", f"**/{nome_base}.csv"]
     
-    for caminho in caminhos:
-        if os.path.exists(caminho):
+    for padrao in padroes:
+        arquivos = glob.glob(padrao, recursive=True)
+        if arquivos:
             try:
-                df = pd.read_csv(caminho)
-                # Padroniza nomes de colunas se existirem
-                if 'dataset_name' in df.columns:
-                    df = df[df['dataset_name'] == dataset_sel]
+                df = pd.read_csv(arquivos[0])
+                # Padroniza nomes de colunas para minúsculas
+                df.columns = [str(c).strip().lower() for c in df.columns]
                 return df
             except Exception as e:
-                print(f"Erro ao ler {caminho}: {e}")
-                
+                print(f"Erro ao ler {arquivos[0]}: {e}")
     return pd.DataFrame()
 
 def Mapeamento_classes_dataset(dataset_name):
@@ -111,7 +109,6 @@ app.layout = html.Div([
     ),
 
     dbc.Container([
-        # Filtros Globais
         dbc.Row([
             dbc.Col([
                 html.Label("Método XAI:"),
@@ -136,7 +133,6 @@ app.layout = html.Div([
             ], width=4),
         ], className="my-3"),
 
-        # RangeSlider Temporal
         dbc.Row([
             dbc.Col([
                 html.Label("Intervalo de Épocas (Brushing Temporal):"),
@@ -144,7 +140,6 @@ app.layout = html.Div([
             ], width=12)
         ], className="mb-4"),
 
-        # Linha 1: Métricas de Treino & Heatmap Principal
         dbc.Row([
             dbc.Col([
                 dbc.Card([
@@ -161,7 +156,6 @@ app.layout = html.Div([
             ], width=12, lg=6),
         ]),
 
-        # Linha 2: Redução de Dimensionalidade & Estabilidade XAI
         dbc.Row([
             dbc.Col([
                 dbc.Card([
@@ -178,7 +172,6 @@ app.layout = html.Div([
             ], width=12, lg=6),
         ]),
 
-        # Linha 3: Sankey Temporal
         dbc.Row([
             dbc.Col([
                 dbc.Card([
@@ -187,7 +180,6 @@ app.layout = html.Div([
                 ], className="shadow-sm mb-4")
             ], width=12)
         ])
-
     ], fluid=True, style={'backgroundColor': '#f8f9fa', 'padding': '20px'})
 ])
 
@@ -217,7 +209,7 @@ def update_options(dataset_sel):
         epocas = sorted([int(x) for x in df_d3['epoca'].dropna().unique()])
 
     map_cls = Mapeamento_classes_dataset(dataset_sel)
-    options_metodo = [{'label': m, 'value': m} for m in metodos]
+    options_metodo = [{'label': str(m).upper(), 'value': m} for m in metodos]
     val_metodo = metodos[0] if metodos else 'SHAP'
     
     options_classe = [
@@ -245,21 +237,21 @@ def update_options(dataset_sel):
      Input('slider-epocas', 'value')]
 )
 def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_sel):
-    # Carregamento dos datasets correspondentes
     df_d2 = carregar_csv_seguro("metricas_epocas", dataset_sel)
     df_d4 = carregar_csv_seguro("resumo_explicacoes", dataset_sel)
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
     df_d5 = carregar_csv_seguro("metricas_estabilidade_concordancia", dataset_sel)
 
-    # 1. Métricas de Época (Dataset 2)
+    # 1. Gráfico de Métricas
     fig_metrics = go.Figure()
     if not df_d2.empty and 'epoca' in df_d2.columns:
-        acc_col = 'accuracy' if 'accuracy' in df_d2.columns else df_d2.columns[1]
-        loss_col = 'loss_validacao' if 'loss_validacao' in df_d2.columns else (df_d2.columns[-1] if len(df_d2.columns) > 2 else None)
+        acc_col = 'accuracy' if 'accuracy' in df_d2.columns else (df_d2.columns[1] if len(df_d2.columns) > 1 else None)
+        loss_col = 'loss_validacao' if 'loss_validacao' in df_d2.columns else None
         
-        fig_metrics.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2[acc_col], mode='lines+markers', name='Acurácia'))
-        if loss_col and loss_col in df_d2.columns:
-            fig_metrics.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2[loss_col], mode='lines+markers', name='Loss', yaxis='y2'))
+        if acc_col:
+            fig_metrics.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2[acc_col], mode='lines+markers', name='Acurácia'))
+        if loss_col:
+            fig_metrics.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2[loss_col], mode='lines+markers', name='Loss Validação', yaxis='y2'))
             
         fig_metrics.update_layout(
             title="Evolução da Performance por Época",
@@ -268,47 +260,47 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             margin=dict(t=30, b=30, l=40, r=40),
             legend=dict(x=0.01, y=0.99)
         )
-    else:
-        fig_metrics.add_annotation(text="Dados de métricas não encontrados", showarrow=False)
 
-    # 2. Heatmap de Importância (Dataset 4)
+    # 2. Heatmap
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
-        df_h_sub = df_d4[df_d4['metodo_xai'].str.upper() == str(metodo_sel).upper()]
+        df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
         if not df_h_sub.empty and 'feature' in df_h_sub.columns and 'epoca' in df_h_sub.columns:
-            val_col = 'importancia_media' if 'importancia_media' in df_h_sub.columns else df_h_sub.columns[0]
+            val_col = 'importancia_media' if 'importancia_media' in df_h_sub.columns else df_h_sub.columns[-1]
             piv = df_h_sub.pivot_table(index='feature', columns='epoca', values=val_col, fill_value=0)
             fig_heat = go.Figure(data=go.Heatmap(z=piv.values, x=piv.columns, y=piv.index, colorscale='Viridis'))
     fig_heat.update_layout(title=f"Heatmap de Importância ({metodo_sel})", margin=dict(t=30, b=30, l=50, r=20))
 
-    # 3. Projeção t-SNE / PCA (Dataset 6)
+    # 3. t-SNE
     fig_tsne = go.Figure()
     if not df_d6.empty and 'metodo_xai' in df_d6.columns:
-        df_t_sub = df_d6[df_d6['metodo_xai'].str.upper() == str(metodo_sel).upper()]
+        df_t_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
         if epocas_sel and 'epoca' in df_t_sub.columns:
             df_t_sub = df_t_sub[(df_t_sub['epoca'] >= epocas_sel[0]) & (df_t_sub['epoca'] <= epocas_sel[1])]
         if not df_t_sub.empty and 'tsne_dim_1' in df_t_sub.columns:
-            color_col = 'classe_predita' if 'classe_predita' in df_t_sub.columns else df_t_sub.columns[0]
+            color_col = 'classe_predita' if 'classe_predita' in df_t_sub.columns else ('cluster_id' if 'cluster_id' in df_t_sub.columns else df_t_sub.columns[-1])
             fig_tsne = go.Figure(data=go.Scatter(
                 x=df_t_sub['tsne_dim_1'], y=df_t_sub['tsne_dim_2'],
                 mode='markers', marker=dict(color=df_t_sub[color_col], colorscale='Plasma', opacity=0.7)
             ))
     fig_tsne.update_layout(title=f"Projeção t-SNE ({metodo_sel})", margin=dict(t=30, b=30, l=30, r=20))
 
-    # 4. Estabilidade e Concordância (Dataset 5)
+    # 4. Estabilidade
     fig_stab = go.Figure()
     if not df_d5.empty and 'tipo_metrica' in df_d5.columns:
-        df_s_sub = df_d5[(df_s_sub_col := (df_d5['tipo_metrica'].str.upper() == str(metodo_sel).upper())) & (df_d5['metrica'] == metrica_est_sel)] if 'metrica' in df_d5.columns else df_d5[df_s_sub_col]
-        if not df_s_sub.empty and 'epoca_destino' in df_s_sub.columns:
+        mask_metodo = df_d5['tipo_metrica'].astype(str).str.upper() == str(metodo_sel).upper()
+        mask_metrica = df_d5['metrica'].astype(str).str.lower() == str(metrica_est_sel).lower() if 'metrica' in df_d5.columns else True
+        df_s_sub = df_d5[mask_metodo & mask_metrica]
+        if not df_s_sub.empty and 'epoca_destino' in df_s_sub.columns and 'valor_metrica' in df_s_sub.columns:
             fig_stab = go.Figure(data=go.Scatter(
                 x=df_s_sub['epoca_destino'], y=df_s_sub['valor_metrica'],
                 mode='lines+markers', name=metrica_est_sel
             ))
     fig_stab.update_layout(title=f"Estabilidade ({metrica_est_sel}) - {metodo_sel}", margin=dict(t=30, b=30, l=40, r=20))
 
-    # 5. Sankey Placeholder / Prontificação
+    # 5. Sankey Placeholder
     fig_sankey = go.Figure()
-    fig_sankey.add_annotation(text="Visualização Sankey Temporal carregada com sucesso", showarrow=False, x=0.5, y=0.5, font=dict(size=14))
+    fig_sankey.add_annotation(text="Visualização Sankey Temporal pronta para dados", showarrow=False, x=0.5, y=0.5, font=dict(size=14))
     fig_sankey.update_layout(title="Transições Temporais (Sankey)", margin=dict(t=30, b=30, l=30, r=30))
 
     return fig_metrics, fig_heat, fig_tsne, fig_stab, fig_sankey
