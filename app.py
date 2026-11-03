@@ -77,7 +77,7 @@ server = app.server
 
 app.layout = html.Div([
     dbc.NavbarSimple(
-        brand="Dashboard Analítico XAI (Multi-Dataset)",
+        brand="Dashboard Analítico XAI (Multi-Dataset & Diagnóstico Temporal)",
         color="light",
         dark=False,
         fluid=True,
@@ -100,13 +100,14 @@ app.layout = html.Div([
     ),
 
     dbc.Container([
+        # Filtros Globais
         dbc.Row([
             dbc.Col([
                 html.Label("Método XAI:"),
                 dcc.Dropdown(id='dropdown-metodo', options=[], clearable=False)
             ], width=4),
             dbc.Col([
-                html.Label("Métrica Auxiliar (Estabilidade):"),
+                html.Label("Métrica Auxiliar (Estabilidade XAI):"),
                 dcc.Dropdown(
                     id='dropdown-metrica-estabilidade',
                     options=[
@@ -124,6 +125,7 @@ app.layout = html.Div([
             ], width=4),
         ], className="my-3"),
 
+        # Slider de Épocas
         dbc.Row([
             dbc.Col([
                 html.Label("Intervalo de Épocas (Brushing Temporal):"),
@@ -131,42 +133,45 @@ app.layout = html.Div([
             ], width=12)
         ], className="mb-4"),
 
+        # Linha 1: Performance + Estabilidade XAI integradas e Heatmap
         dbc.Row([
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Performance do Modelo ao Longo das Épocas (Loss & Accuracy)"),
-                    dbc.CardBody([dcc.Graph(id='metrics-epochs-graph')])
+                    dbc.CardHeader("Evolução do Modelo: Performance (Loss/Acurácia) e Estabilidade XAI"),
+                    dbc.CardBody([dcc.Graph(id='metrics-stability-combined-graph')])
                 ], className="shadow-sm mb-4")
             ], width=12, lg=6),
 
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Resumo Global / Heatmap de Importância"),
+                    dbc.CardHeader("Resumo Global / Heatmap de Importância Temporal"),
                     dbc.CardBody([dcc.Graph(id='heatmap-graph')])
                 ], className="shadow-sm mb-4")
             ], width=12, lg=6),
         ]),
 
+        # Linha 2: Redução de Dimensionalidade Principal (t-SNE) e Visualização Auxiliar de Dimensionalidade
         dbc.Row([
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Redução de Dimensionalidade (t-SNE / PCA)"),
+                    dbc.CardHeader("Redução de Dimensionalidade Principal (t-SNE / Projeção Espacial)"),
                     dbc.CardBody([dcc.Graph(id='tsne-graph')])
                 ], className="shadow-sm mb-4")
             ], width=12, lg=6),
 
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Métricas de Estabilidade e Concordância XAI"),
-                    dbc.CardBody([dcc.Graph(id='stability-graph')])
+                    dbc.CardHeader("Análise Auxiliar de Dimensionalidade (Dispersão / Variação Temporal)"),
+                    dbc.CardBody([dcc.Graph(id='dim-reduction-aux-graph')])
                 ], className="shadow-sm mb-4")
             ], width=12, lg=6),
         ]),
 
+        # Linha 3: Sankey
         dbc.Row([
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Fluxos Temporais de Transições (Sankey)"),
+                    dbc.CardHeader("Fluxos Temporais de Transições entre Épocas (Sankey)"),
                     dbc.CardBody([dcc.Graph(id='sankey-graph', style={'height': '600px'})])
                 ], className="shadow-sm mb-4")
             ], width=12)
@@ -216,10 +221,10 @@ def update_options(dataset_sel):
     return options_metodo, val_metodo, options_classe, min_ep, max_ep, marks_ep, [min_ep, max_ep]
 
 @app.callback(
-    [Output('metrics-epochs-graph', 'figure'),
+    [Output('metrics-stability-combined-graph', 'figure'),
      Output('heatmap-graph', 'figure'),
      Output('tsne-graph', 'figure'),
-     Output('stability-graph', 'figure'),
+     Output('dim-reduction-aux-graph', 'figure'),
      Output('sankey-graph', 'figure')],
     [Input('dropdown-dataset', 'value'),
      Input('dropdown-metodo', 'value'),
@@ -234,29 +239,46 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
     df_d5 = carregar_csv_seguro("metricas_estabilidade_concordancia", dataset_sel)
     df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
 
-    # 1. Gráfico de Métricas
-    fig_metrics = go.Figure()
+    # 1. Gráfico Combinado: Acurácia, Loss e Estabilidade XAI
+    fig_combined = go.Figure()
     if df_d2.empty:
-        fig_metrics.add_annotation(text="Arquivo CSV de métricas não encontrado no ZIP.", showarrow=False)
-    elif 'epoca' not in df_d2.columns:
-        fig_metrics.add_annotation(text=f"Coluna 'epoca' ausente. Encontradas: {list(df_d2.columns)}", showarrow=False)
+        fig_combined.add_annotation(text="Dados de métricas de treino não encontrados.", showarrow=False)
     else:
         acc_col = 'accuracy' if 'accuracy' in df_d2.columns else (df_d2.columns[1] if len(df_d2.columns) > 1 else None)
         loss_col = 'loss_validacao' if 'loss_validacao' in df_d2.columns else None
         
-        if acc_col:
-            fig_metrics.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2[acc_col], mode='lines+markers', name='Acurácia'))
-        if loss_col:
-            fig_metrics.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2[loss_col], mode='lines+markers', name='Loss Validação', yaxis='y2'))
+        if acc_col and 'epoca' in df_d2.columns:
+            fig_combined.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2[acc_col], mode='lines+markers', name='Acurácia', line=dict(color='#2ca02c')))
+        if loss_col and 'epoca' in df_d2.columns:
+            fig_combined.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2[loss_col], mode='lines+markers', name='Loss Validação', yaxis='y2', line=dict(color='#d62728')))
             
-        fig_metrics.update_layout(title="Evolução da Performance por Época", yaxis=dict(title="Acurácia"), yaxis2=dict(title="Loss", overlaying='y', side='right', showgrid=False), margin=dict(t=30, b=30, l=40, r=40), legend=dict(x=0.01, y=0.99))
+        # Adiciona a curva de Estabilidade XAI sobreposta
+        if not df_d5.empty and 'tipo_metrica' in df_d5.columns:
+            mask_metodo = df_d5['tipo_metrica'].astype(str).str.upper() == str(metodo_sel).upper()
+            mask_metrica = df_d5['metrica'].astype(str).str.lower() == str(metrica_est_sel).lower() if 'metrica' in df_d5.columns else True
+            df_s_sub = df_d5[mask_metodo & mask_metrica]
+            
+            if not df_s_sub.empty and 'epoca_destino' in df_s_sub.columns and 'valor_metrica' in df_s_sub.columns:
+                fig_combined.add_trace(go.Scatter(
+                    x=df_s_sub['epoca_destino'], y=df_s_sub['valor_metrica'],
+                    mode='lines+markers', name=f'Estabilidade ({metrica_est_sel})',
+                    line=dict(color='#1f77b4', dash='dash')
+                ))
 
-    # 2. Heatmap
+        fig_combined.update_layout(
+            title=f"Performance do Modelo & Estabilidade XAI ({metodo_sel})",
+            yaxis=dict(title="Acurácia / Estabilidade"),
+            yaxis2=dict(title="Loss", overlaying='y', side='right', showgrid=False),
+            margin=dict(t=30, b=30, l=40, r=40),
+            legend=dict(x=0.01, y=0.99, orientation='h')
+        )
+
+    # 2. Heatmap de Importância
     fig_heat = go.Figure()
     if df_d4.empty:
         fig_heat.add_annotation(text="Arquivo CSV de resumo_explicacoes não encontrado.", showarrow=False)
     elif 'metodo_xai' not in df_d4.columns or 'feature' not in df_d4.columns or 'epoca' not in df_d4.columns:
-        fig_heat.add_annotation(text=f"Colunas XAI/feature/epoca ausentes. Encontradas: {list(df_d4.columns)}", showarrow=False)
+        fig_heat.add_annotation(text=f"Colunas XAI/feature/epoca ausentes.", showarrow=False)
     else:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
         if not df_h_sub.empty:
@@ -265,12 +287,12 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             fig_heat = go.Figure(data=go.Heatmap(z=piv.values, x=piv.columns, y=piv.index, colorscale='Viridis'))
             fig_heat.update_layout(title=f"Heatmap de Importância ({metodo_sel})", margin=dict(t=30, b=30, l=50, r=20))
 
-    # 3. t-SNE
+    # 3. Projeção t-SNE Principal
     fig_tsne = go.Figure()
     if df_d6.empty:
         fig_tsne.add_annotation(text="Arquivo CSV de projecao_tsne não encontrado.", showarrow=False)
     elif 'metodo_xai' not in df_d6.columns or 'tsne_dim_1' not in df_d6.columns:
-        fig_tsne.add_annotation(text=f"Colunas t-SNE ausentes. Encontradas: {list(df_d6.columns)}", showarrow=False)
+        fig_tsne.add_annotation(text=f"Colunas t-SNE ausentes.", showarrow=False)
     else:
         df_t_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
         if epocas_sel and 'epoca' in df_t_sub.columns:
@@ -278,66 +300,51 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
         if not df_t_sub.empty:
             color_col = 'classe_predita' if 'classe_predita' in df_t_sub.columns else ('cluster_id' if 'cluster_id' in df_t_sub.columns else df_t_sub.columns[-1])
             fig_tsne = go.Figure(data=go.Scatter(x=df_t_sub['tsne_dim_1'], y=df_t_sub['tsne_dim_2'], mode='markers', marker=dict(color=df_t_sub[color_col], colorscale='Plasma', opacity=0.7)))
-            fig_tsne.update_layout(title=f"Projeção t-SNE ({metodo_sel})", margin=dict(t=30, b=30, l=30, r=20))
+            fig_tsne.update_layout(title=f"Projeção t-SNE Espacial ({metodo_sel})", margin=dict(t=30, b=30, l=30, r=20))
 
-    # 4. Estabilidade
-    fig_stab = go.Figure()
-    if df_d5.empty:
-        fig_stab.add_annotation(text="Arquivo CSV de estabilidade não encontrado.", showarrow=False)
-    elif 'tipo_metrica' not in df_d5.columns or 'epoca_destino' not in df_d5.columns:
-        fig_stab.add_annotation(text=f"Colunas de estabilidade ausentes. Encontradas: {list(df_d5.columns)}", showarrow=False)
+    # 4. Visualização Auxiliar de Redução de Dimensionalidade (Variação/Dispersão Temporal)
+    fig_dim_aux = go.Figure()
+    if df_d6.empty or 'tsne_dim_1' not in df_d6.columns:
+        fig_dim_aux.add_annotation(text="Dados de projeção de dimensionalidade não disponíveis.", showarrow=False)
     else:
-        mask_metodo = df_d5['tipo_metrica'].astype(str).str.upper() == str(metodo_sel).upper()
-        mask_metrica = df_d5['metrica'].astype(str).str.lower() == str(metrica_est_sel).lower() if 'metrica' in df_d5.columns else True
-        df_s_sub = df_d5[mask_metodo & mask_metrica]
-        if not df_s_sub.empty and 'valor_metrica' in df_s_sub.columns:
-            fig_stab = go.Figure(data=go.Scatter(x=df_s_sub['epoca_destino'], y=df_s_sub['valor_metrica'], mode='lines+markers', name=metrica_est_sel))
-            fig_stab.update_layout(title=f"Estabilidade ({metrica_est_sel}) - {metodo_sel}", margin=dict(t=30, b=30, l=40, r=20))
+        df_aux_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
+        if not df_aux_sub.empty and 'epoca' in df_aux_sub.columns:
+            # Gráfico BoxPlot/Dispersão auxiliar da variação da primeira dimensão por época
+            fig_dim_aux = go.Figure(data=go.Box(
+                x=df_aux_sub['epoca'], y=df_aux_sub['tsne_dim_1'],
+                name="Dimensão 1 (t-SNE)", marker_color='#9467bd'
+            ))
+            fig_dim_aux.update_layout(title=f"Dispersão da Componente Principal por Época ({metodo_sel})", margin=dict(t=30, b=30, l=40, r=20))
 
-    # 5. Fluxos Temporais (Sankey Dinâmico e Flexível)
+    # 5. Fluxos Temporais (Sankey com fallback de ID de instância)
     fig_sankey = go.Figure()
     if df_d3.empty:
         fig_sankey.add_annotation(text="Arquivo CSV explicacoes_instancias não encontrado.", showarrow=False)
     else:
-        # Detecta dinamicamente a coluna de id de instância
-        id_col = None
-        for col in ['instance_id', 'instancia_id', 'instancia', 'id_instancia', 'id', 'sample_id']:
-            if col in df_d3.columns:
-                id_col = col
-                break
+        df_sankey_sub = df_d3.copy()
+        if 'metodo_xai' in df_sankey_sub.columns:
+            df_sankey_sub = df_sankey_sub[df_sankey_sub['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
 
-        # Detecta dinamicamente a coluna de classe/grupo predito
-        target_col = None
-        for col in ['classe_predita', 'cluster_id', 'predicao', 'y_pred', 'target_pred', 'pred']:
-            if col in df_d3.columns:
-                target_col = col
-                break
+        # Mapeia ou gera dinamicamente a coluna de id de instância
+        id_col = next((c for c in ['instance_id', 'instancia_id', 'instancia', 'id_instancia', 'id', 'sample_id'] if c in df_sankey_sub.columns), None)
+        if not id_col:
+            # Gera ID automático por posição dentro de cada época
+            df_sankey_sub['auto_instance_id'] = df_sankey_sub.groupby('epoca').cumcount() if 'epoca' in df_sankey_sub.columns else range(len(df_sankey_sub))
+            id_col = 'auto_instance_id'
 
-        if not id_col or not target_col:
-            fig_sankey.add_annotation(
-                text=f"Colunas para Sankey não mapeadas. Encontradas: {list(df_d3.columns)}",
-                showarrow=False
-            )
+        # Mapeia dinamicamente a coluna de classe/grupo
+        target_col = next((c for c in ['classe_predita', 'cluster_id', 'predicao', 'y_pred', 'target_pred', 'pred', 'classe_real'] if c in df_sankey_sub.columns), None)
+
+        if not target_col:
+            fig_sankey.add_annotation(text=f"Coluna de classe predita/cluster não localizada.", showarrow=False)
         else:
-            df_sankey_sub = df_d3.copy()
-            if 'metodo_xai' in df_sankey_sub.columns:
-                df_sankey_sub = df_sankey_sub[df_sankey_sub['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
-
-            # Filtro por classe real (se existir)
-            real_col = next((c for c in ['classe_real', 'y_real', 'target_real', 'target'] if c in df_sankey_sub.columns), None)
-            if classe_sel != 'TODAS' and real_col:
-                try:
-                    df_sankey_sub = df_sankey_sub[df_sankey_sub[real_col] == int(classe_sel)]
-                except ValueError:
-                    pass
-
             if epocas_sel and 'epoca' in df_sankey_sub.columns:
                 df_sankey_sub = df_sankey_sub[(df_sankey_sub['epoca'] >= epocas_sel[0]) & (df_sankey_sub['epoca'] <= epocas_sel[1])]
 
             epocas_disponiveis = sorted(df_sankey_sub['epoca'].unique()) if 'epoca' in df_sankey_sub.columns else []
 
             if len(epocas_disponiveis) < 2:
-                fig_sankey.add_annotation(text="Selecione um intervalo com pelo menos 2 épocas para gerar o fluxo Sankey.", showarrow=False)
+                fig_sankey.add_annotation(text="Selecione um intervalo com pelo menos 2 épocas no slider para exibir o fluxo.", showarrow=False)
             else:
                 nodes = []
                 sources, targets, values = [], [], []
@@ -377,11 +384,11 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                         node=dict(pad=15, thickness=20, line=dict(color="black", width=0.5), label=nodes, color="#1f77b4"),
                         link=dict(source=sources, target=targets, value=values, color="rgba(160, 160, 160, 0.4)")
                     )])
-                    fig_sankey.update_layout(title=f"Fluxos Temporais de Transição ({metodo_sel})", margin=dict(t=30, b=30, l=30, r=30))
+                    fig_sankey.update_layout(title=f"Fluxos Temporais de Transição de Classe ({metodo_sel})", margin=dict(t=30, b=30, l=30, r=30))
                 else:
                     fig_sankey.add_annotation(text="Sem transições registradas para o intervalo de épocas selecionado.", showarrow=False)
 
-    return fig_metrics, fig_heat, fig_tsne, fig_stab, fig_sankey
+    return fig_combined, fig_heat, fig_tsne, fig_dim_aux, fig_sankey
 
 if __name__ == '__main__':
     app.run(debug=False)
