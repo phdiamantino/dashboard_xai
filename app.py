@@ -192,6 +192,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
 # 2. INICIALIZAÇÃO DA APLICAÇÃO DASH
 # ==========================================
 app = dash.Dash(__name__)
+server = app.server  # Obrigatório para o Gunicorn/Render
 
 app.layout = html.Div([
     html.H2("Explorador Sankey Temporal de Transições XAI (Multi-Dataset)", style={'font-family': 'sans-serif'}),
@@ -452,4 +453,4 @@ def update_sankey(dataset_sel, metodo_sel, cor_metrica_sel, classe_sel, epocas_s
 # 4. EXECUÇÃO
 # ==========================================
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)
