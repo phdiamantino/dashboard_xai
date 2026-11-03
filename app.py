@@ -1,7 +1,8 @@
 import os
 import zipfile
-import requests
 import glob
+import shutil
+import gdown
 import dash
 from dash import dcc, html, Input, Output
 import plotly.graph_objects as go
@@ -9,43 +10,37 @@ import pandas as pd
 import dash_bootstrap_components as dbc
 
 # ==========================================
-# 0. DOWNLOAD ROBUSTO DO GOOGLE DRIVE
+# 0. DOWNLOAD ROBUSTO VIA GDOWN (GOOGLE DRIVE)
 # ==========================================
 DRIVE_FILE_ID = "16E8yydOSbV6RwlhVPW5in_lIQr7CcjZm"
 
-def baixar_drive_robusto(file_id, destination):
-    URL = "https://docs.google.com/uc?export=download"
-    session = requests.Session()
-    response = session.get(URL, params={'id': file_id}, stream=True)
-    
-    token = None
-    for key, value in response.cookies.items():
-        if key.startswith('download_warning'):
-            token = value
-            break
-            
-    if token:
-        params = {'id': file_id, 'confirm': token}
-        response = session.get(URL, params=params, stream=True)
-        
-    with open(destination, "wb") as f:
-        for chunk in response.iter_content(32768):
-            if chunk:
-                f.write(chunk)
-
 def preparar_dados():
-    if not glob.glob("**/*metricas_epocas*.csv", recursive=True):
-        print("[Início] Baixando ZIP do Google Drive...")
+    # Verifica se já temos CSVs extraídos na máquina
+    if not glob.glob("**/*.csv", recursive=True):
+        print("[Início] Baixando arquivo ZIP pesado do Google Drive via gdown...")
         try:
             zip_path = "dados_xai.zip"
-            baixar_drive_robusto(DRIVE_FILE_ID, zip_path)
+            url = f"https://drive.google.com/uc?id={DRIVE_FILE_ID}"
+            
+            # gdown lida com redirecionamentos e confirmações de vírus automaticamente
+            gdown.download(url, zip_path, quiet=False)
             
             print("[Extraindo] Descompactando arquivos...")
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(".")
-            print("[Sucesso] Dados prontos para leitura!")
+                
+            # Move todos os CSVs encontrados em subpastas para o diretório raiz
+            for root, dirs, files in os.walk("."):
+                for file in files:
+                    if file.endswith(".csv"):
+                        src_path = os.path.join(root, file)
+                        dst_path = file
+                        if src_path != dst_path and not os.path.exists(dst_path):
+                            shutil.move(src_path, dst_path)
+                            
+            print("[Sucesso] Todos os dados foram baixados e posicionados na raiz com sucesso!")
         except Exception as e:
-            print(f"[Erro] Falha no download ou extração: {e}")
+            print(f"[Erro] Falha grave no download/extração: {e}")
 
 preparar_dados()
 
@@ -60,8 +55,8 @@ def carregar_csv_seguro(nome_base, dataset_sel):
         if arquivos:
             try:
                 df = pd.read_csv(arquivos[0])
-                # Limpeza profunda: remove BOM, espaços e padroniza para minúsculo
-                df.columns = df.columns.str.replace('\ufeff', '').str.replace('ï»¿', '').str.strip().str.lower()
+                # Limpeza de caracteres invisíveis (BOM UTF-8) e padronização
+                df.columns = df.columns.astype(str).str.replace('\ufeff', '').str.replace('ï»¿', '').str.strip().str.lower()
                 
                 if 'dataset_name' in df.columns:
                     df = df[df['dataset_name'].astype(str).str.strip().str.lower() == dataset_sel.lower()]
@@ -303,7 +298,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             fig_stab = go.Figure(data=go.Scatter(x=df_s_sub['epoca_destino'], y=df_s_sub['valor_metrica'], mode='lines+markers', name=metrica_est_sel))
             fig_stab.update_layout(title=f"Estabilidade ({metrica_est_sel}) - {metodo_sel}", margin=dict(t=30, b=30, l=40, r=20))
 
-    # 5. Sankey Placeholder
+    # 5. Sankey
     fig_sankey = go.Figure()
     fig_sankey.add_annotation(text="Sankey pronto - Aguardando processamento temporal", showarrow=False, x=0.5, y=0.5, font=dict(size=14))
     fig_sankey.update_layout(title="Transições Temporais (Sankey)", margin=dict(t=30, b=30, l=30, r=30))
