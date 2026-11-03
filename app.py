@@ -1,9 +1,45 @@
 import os
+import zipfile
+import glob
+import shutil
+import gdown
 import dash
 from dash import dcc, html, Input, Output
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
+import dash_bootstrap_components as dbc
+
+# ==========================================
+# 0. DOWNLOAD ROBUSTO VIA GDOWN (GOOGLE DRIVE)
+# ==========================================
+DRIVE_FILE_ID = "125OsCXEBfGhiLNXyjBULAJKKbVvUNr7Q"
+
+def preparar_dados():
+    if not glob.glob("**/*.csv", recursive=True):
+        print("[Início] Baixando arquivo ZIP do Google Drive via gdown...")
+        try:
+            zip_path = "dados_xai.zip"
+            url = f"https://drive.google.com/uc?id={DRIVE_FILE_ID}"
+            gdown.download(url, zip_path, quiet=False)
+            
+            print("[Extraindo] Descompactando arquivos...")
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(".")
+                
+            for root, dirs, files in os.walk("."):
+                for file in files:
+                    if file.endswith(".csv"):
+                        src_path = os.path.join(root, file)
+                        dst_path = file
+                        if src_path != dst_path and not os.path.exists(dst_path):
+                            shutil.move(src_path, dst_path)
+                            
+            print("[Sucesso] Dados baixados e organizados na raiz com sucesso!")
+        except Exception as e:
+            print(f"[Erro] Falha grave no download/extração: {e}")
+
+preparar_dados()
 
 # ==========================================
 # 1. FUNÇÕES AUXILIARES E CARREGAMENTO
@@ -54,7 +90,6 @@ def carregar_dados_sankey(dataset_sel):
 
     modelo_alvo = MAPA_DATASET_MODELO.get(dataset_sel, 'MLP_5L_BREAST_CANCER')
 
-    # Filtragem obrigatória por modelo_id caso todos os datasets estejam no mesmo CSV
     if not df_d3.empty and 'modelo_id' in df_d3.columns and (df_d3['modelo_id'] == modelo_alvo).any():
         df_d3 = df_d3[df_d3['modelo_id'] == modelo_alvo].copy()
 
@@ -65,14 +100,9 @@ def carregar_dados_sankey(dataset_sel):
 
 
 def processar_dados_sankey(df_d3, df_d2, dataset_sel):
-    """
-    Processa os DataFrames D3 e D2 para criar a estrutura de transições
-    de fluxo (época t -> época t+1) com base nas instâncias e métricas reais do dataset.
-    """
     if df_d3.empty or df_d2.empty:
         return pd.DataFrame(), []
 
-    # Padroniza nomes de colunas essenciais se necessário
     if 'importancia_absoluta' not in df_d3.columns:
         if 'valor_atribuicao' in df_d3.columns:
             df_d3['importancia_absoluta'] = df_d3['valor_atribuicao'].abs()
@@ -87,7 +117,6 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
         if 'instancia_id' not in df_d3.columns:
             df_d3['instancia_id'] = range(len(df_d3))
 
-    # 1. Agrupa importância total por instância e época
     agg_dict = {'importancia_absoluta': 'sum'}
     if 'classe_real' in df_d3.columns:
         agg_dict['classe_real'] = 'first'
@@ -98,7 +127,6 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
         ['metodo_xai', 'epoca', 'instancia_id']
     ).agg(agg_dict).reset_index().rename(columns={'importancia_absoluta': 'importancia_total'})
 
-    # 2. Conversão defensiva de época
     df_inst_summary['epoca'] = pd.to_numeric(df_inst_summary['epoca'], errors='coerce').fillna(0).astype(int)
     
     acc_col = 'accuracy' if 'accuracy' in df_d2.columns else df_d2.columns[1]
@@ -108,10 +136,8 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
     df_d2_sub.columns = ['epoca', 'accuracy', 'loss_validacao']
     df_d2_sub['epoca'] = pd.to_numeric(df_d2_sub['epoca'], errors='coerce').fillna(0).astype(int)
 
-    # 3. Mescla métricas da época
     df_inst_summary = df_inst_summary.merge(df_d2_sub, on='epoca', how='left')
 
-    # 4. Determinação dinâmica das classes por dataset (se não existir na base)
     if 'classe_real' not in df_inst_summary.columns:
         prop_c1 = {'breast_cancer': 0.37, 'wine_quality': 0.22, 'german_credit': 0.70}.get(dataset_sel, 0.5)
         np.random.seed(abs(hash(dataset_sel)) % (2**32))
@@ -130,7 +156,6 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
     df_inst_summary['acerto'] = (df_inst_summary['classe_predita'] == df_inst_summary['classe_real']).astype(int)
     df_inst_summary['taxa_erro'] = 1.0 - df_inst_summary['acerto']
 
-    # 5. Constrói transições consecutivas (t -> t+1)
     epocas = sorted([int(x) for x in df_inst_summary['epoca'].unique()])
     metodos = [str(m) for m in df_inst_summary['metodo_xai'].unique()]
 
@@ -168,11 +193,9 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
                 })
 
     df_trans = pd.DataFrame(transicoes)
-
     if df_trans.empty:
         return pd.DataFrame(), epocas
 
-    # 6. Agrupamento final por fluxo de transição
     df_sankey = df_trans.groupby(
         ['metodo_xai', 'epoca_origem', 'epoca_destino', 'classe_origem', 'classe_destino']
     ).agg(
@@ -191,83 +214,82 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
 # ==========================================
 # 2. INICIALIZAÇÃO DA APLICAÇÃO DASH
 # ==========================================
-app = dash.Dash(__name__)
-server = app.server  # Obrigatório para o Gunicorn/Render
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+server = app.server  # Obrigatório para o Gunicorn / Render
 
 app.layout = html.Div([
-    html.H2("Explorador Sankey Temporal de Transições XAI (Multi-Dataset)", style={'font-family': 'sans-serif'}),
+    dbc.NavbarSimple(
+        brand="Dashboard Analítico XAI (Multi-Dataset & Diagnóstico Temporal)",
+        color="light",
+        dark=False,
+        fluid=True,
+        children=[
+            html.Div([
+                html.Label("Dataset:", style={'marginRight': '10px', 'fontWeight': 'bold'}),
+                dcc.Dropdown(
+                    id='dropdown-dataset',
+                    options=[
+                        {'label': 'Breast Cancer Wisconsin', 'value': 'breast_cancer'},
+                        {'label': 'Wine Quality (Red/White)', 'value': 'wine_quality'},
+                        {'label': 'German Credit (Cost Risk)', 'value': 'german_credit'}
+                    ],
+                    value='breast_cancer',
+                    clearable=False,
+                    style={'width': '250px'}
+                )
+            ], style={'display': 'flex', 'alignItems': 'center'})
+        ]
+    ),
 
-    # Controles
-    html.Div([
-        # FILTRO DE DATASET
-        html.Div([
-            html.Label("Dataset / Banco de Dados:"),
-            dcc.Dropdown(
-                id='dropdown-dataset',
-                options=[
-                    {'label': 'Breast Cancer Wisconsin', 'value': 'breast_cancer'},
-                    {'label': 'Wine Quality (Red/White)', 'value': 'wine_quality'},
-                    {'label': 'German Credit (Pré-processado)', 'value': 'german_credit'}
-                ],
-                value='breast_cancer',
-                clearable=False
-            )
-        ], style={'width': '23%', 'display': 'inline-block', 'marginRight': '2%'}),
+    dbc.Container([
+        # Filtros Globais
+        dbc.Row([
+            dbc.Col([
+                html.Label("Método XAI:"),
+                dcc.Dropdown(id='dropdown-metodo', options=[], clearable=False)
+            ], width=4),
+            dbc.Col([
+                html.Label("Mapeamento de Cores:"),
+                dcc.Dropdown(
+                    id='dropdown-cor-metrica',
+                    options=[
+                        {'label': 'Classe Predita Dominante', 'value': 'classe'},
+                        {'label': 'Taxa de Confiança', 'value': 'confianca'},
+                        {'label': 'Taxa de Erro', 'value': 'erro'}
+                    ],
+                    value='classe',
+                    clearable=False
+                )
+            ], width=4),
+            dbc.Col([
+                html.Label("Filtro de Classe:"),
+                dcc.Dropdown(id='dropdown-classe', options=[], value='TODAS', clearable=False)
+            ], width=4),
+        ], className="my-3"),
 
-        html.Div([
-            html.Label("Método XAI:"),
-            dcc.Dropdown(
-                id='dropdown-metodo',
-                options=[],
-                clearable=False
-            )
-        ], style={'width': '20%', 'display': 'inline-block', 'marginRight': '2%'}),
+        # Slider de Épocas
+        dbc.Row([
+            dbc.Col([
+                html.Label("Intervalo de Épocas (Brushing Temporal):"),
+                dcc.RangeSlider(id='slider-epocas', min=1, max=40, step=None, marks={1: "Ép 1"}, value=[1, 40])
+            ], width=12)
+        ], className="mb-4"),
 
-        html.Div([
-            html.Label("Mapeamento de Cores:"),
-            dcc.Dropdown(
-                id='dropdown-cor-metrica',
-                options=[
-                    {'label': 'Classe Predita Dominante', 'value': 'classe'},
-                    {'label': 'Taxa de Confiança', 'value': 'confianca'},
-                    {'label': 'Taxa de Erro', 'value': 'erro'}
-                ],
-                value='classe',
-                clearable=False
-            )
-        ], style={'width': '22%', 'display': 'inline-block', 'marginRight': '2%'}),
-
-        html.Div([
-            html.Label("Filtro de Classe:"),
-            dcc.Dropdown(
-                id='dropdown-classe',
-                options=[],
-                value='TODAS',
-                clearable=False
-            )
-        ], style={'width': '23%', 'display': 'inline-block'}),
-    ], style={'marginBottom': '20px'}),
-
-    # Slider de Épocas
-    html.Div([
-        html.Label("Intervalo de Épocas (Brushing Temporal):"),
-        dcc.RangeSlider(
-            id='slider-epocas',
-            min=1,
-            max=40,
-            step=None,
-            marks={1: "Época 1"},
-            value=[1, 40]
-        )
-    ], style={'marginBottom': '30px', 'width': '95%'}),
-
-    # Visualização Sankey
-    dcc.Graph(id='sankey-graph', style={'height': '680px'})
-], style={'padding': '20px'})
+        # Linha 1: Sankey Completo com Hover Detalhado
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Fluxos Temporais de Transição de Classe (Sankey Reativo ao XAI)"),
+                    dbc.CardBody([dcc.Graph(id='sankey-graph', style={'height': '680px'})])
+                ], className="shadow-sm mb-4")
+            ], width=12)
+        ])
+    ], fluid=True, style={'backgroundColor': '#f8f9fa', 'padding': '20px'})
+])
 
 
 # ==========================================
-# 3. CALLBACKS
+# 3. CALLBACKS DE ATUALIZAÇÃO
 # ==========================================
 
 @app.callback(
@@ -291,21 +313,20 @@ def update_dataset_options(dataset_sel):
         epocas = [1, 5, 10, 20, 30]
 
     map_cls = Mapeamento_classes_dataset(dataset_sel)
-
-    options_metodo = [{'label': m, 'value': m} for m in metodos]
+    options_metodo = [{'label': str(m).upper(), 'value': m} for m in metodos]
     val_metodo = metodos[0] if metodos else 'SHAP'
-
+    
     options_classe = [
         {'label': 'Todas as Classes', 'value': 'TODAS'},
         {'label': f"Classe 0 ({map_cls[0]})", 'value': 0},
         {'label': f"Classe 1 ({map_cls[1]})", 'value': 1}
     ]
-
-    min_ep, max_ep = min(epocas), max(epocas)
-    marks_ep = {int(ep): f"Ép {ep}" for ep in epocas}
-    val_slider = [min_ep, max_ep]
-
-    return options_metodo, val_metodo, options_classe, min_ep, max_ep, marks_ep, val_slider
+    
+    min_ep = min(epocas) if epocas else 1
+    max_ep = max(epocas) if epocas else 40
+    marks_ep = {int(ep): f"Ép {ep}" for ep in epocas} if epocas else {1: "Ép 1"}
+    
+    return options_metodo, val_metodo, options_classe, min_ep, max_ep, marks_ep, [min_ep, max_ep]
 
 
 @app.callback(
@@ -404,7 +425,6 @@ def update_sankey(dataset_sel, metodo_sel, cor_metrica_sel, classe_sel, epocas_s
 
             link_colors.append(f"rgba({base_rgb}, {alpha:.2f})")
 
-            # HOVER TEXT COMPLETO IDÊNTICO AO SEU NOTEBOOK ORIGINAL
             hover_text = (
                 f"<b>Dataset:</b> {dataset_sel.upper()}<br>"
                 f"<b>Método XAI:</b> {m_alvo}<br>"
