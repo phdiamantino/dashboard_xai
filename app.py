@@ -9,9 +9,10 @@ import numpy as np
 import dash_bootstrap_components as dbc
 
 # ==========================================
-# 0. DOWNLOAD E EXTRAÇÃO AUTOMÁTICA DOS CSVs (GOOGLE DRIVE)
+# 0. DOWNLOAD E EXTRAÇÃO AUTOMÁTICA DOS CSVs (GOOGLE DRIVE CORRIGIDO)
 # ==========================================
-URL_GOOGLE_DRIVE_ZIP = "https://drive.google.com/uc?export=download&id=16E8yydOSbV6RwlhVPW5in_lIQr7CcjZm"
+# Adicionado &confirm=t para evitar a página de aviso de ficheiro grande do Google Drive
+URL_GOOGLE_DRIVE_ZIP = "https://drive.google.com/uc?export=download&confirm=t&id=16E8yydOSbV6RwlhVPW5in_lIQr7CcjZm"
 
 def baixar_e_descompactar_dados():
     if not os.path.exists("resumo_explicacoes_breast_cancer.csv"):
@@ -64,8 +65,8 @@ server = app.server  # Essencial para o Render / Gunicorn
 app.layout = html.Div([
     dbc.NavbarSimple(
         brand="Dashboard Analítico XAI (Multi-Dataset)",
-        brand_color="dark",
         color="light",
+        dark=False,
         fluid=True,
         children=[
             html.Div([
