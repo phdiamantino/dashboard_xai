@@ -252,7 +252,6 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
         if loss_col and 'epoca' in df_d2.columns:
             fig_combined.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2[loss_col], mode='lines+markers', name='Loss Validação', yaxis='y2', line=dict(color='#d62728')))
             
-        # Adiciona a curva de Estabilidade XAI sobreposta
         if not df_d5.empty and 'tipo_metrica' in df_d5.columns:
             mask_metodo = df_d5['tipo_metrica'].astype(str).str.upper() == str(metodo_sel).upper()
             mask_metrica = df_d5['metrica'].astype(str).str.lower() == str(metrica_est_sel).lower() if 'metrica' in df_d5.columns else True
@@ -309,35 +308,51 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
     else:
         df_aux_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
         if not df_aux_sub.empty and 'epoca' in df_aux_sub.columns:
-            # Gráfico BoxPlot/Dispersão auxiliar da variação da primeira dimensão por época
             fig_dim_aux = go.Figure(data=go.Box(
                 x=df_aux_sub['epoca'], y=df_aux_sub['tsne_dim_1'],
                 name="Dimensão 1 (t-SNE)", marker_color='#9467bd'
             ))
             fig_dim_aux.update_layout(title=f"Dispersão da Componente Principal por Época ({metodo_sel})", margin=dict(t=30, b=30, l=40, r=20))
 
-    # 5. Fluxos Temporais (Sankey com fallback de ID de instância)
+    # 5. Fluxos Temporais (Sankey Adaptado para Cruzar D3 e D6)
     fig_sankey = go.Figure()
     if df_d3.empty:
         fig_sankey.add_annotation(text="Arquivo CSV explicacoes_instancias não encontrado.", showarrow=False)
     else:
-        df_sankey_sub = df_d3.copy()
-        if 'metodo_xai' in df_sankey_sub.columns:
-            df_sankey_sub = df_sankey_sub[df_sankey_sub['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
-
-        # Mapeia ou gera dinamicamente a coluna de id de instância
-        id_col = next((c for c in ['instance_id', 'instancia_id', 'instancia', 'id_instancia', 'id', 'sample_id'] if c in df_sankey_sub.columns), None)
-        if not id_col:
-            # Gera ID automático por posição dentro de cada época
-            df_sankey_sub['auto_instance_id'] = df_sankey_sub.groupby('epoca').cumcount() if 'epoca' in df_sankey_sub.columns else range(len(df_sankey_sub))
+        id_col = next((c for c in ['instancia_id', 'instance_id', 'id', 'sample_id'] if c in df_d3.columns), None)
+        
+        # Isola as instâncias únicas do D3
+        df_instancias = df_d3[df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
+        if id_col:
+            df_instancias = df_instancias[['epoca', id_col]].drop_duplicates()
+        else:
+            df_instancias['auto_instance_id'] = df_instancias.groupby('epoca').cumcount()
             id_col = 'auto_instance_id'
 
-        # Mapeia dinamicamente a coluna de classe/grupo
-        target_col = next((c for c in ['classe_predita', 'cluster_id', 'predicao', 'y_pred', 'target_pred', 'pred', 'classe_real'] if c in df_sankey_sub.columns), None)
-
-        if not target_col:
-            fig_sankey.add_annotation(text=f"Coluna de classe predita/cluster não localizada.", showarrow=False)
+        target_col = None
+        
+        # Tenta obter a classe predita a partir do dataframe de projeção (D6)
+        if not df_d6.empty and 'classe_predita' in df_d6.columns:
+            id_col_d6 = next((c for c in ['instancia_id', 'instance_id', 'id', 'sample_id'] if c in df_d6.columns), None)
+            if id_col_d6:
+                df_d6_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()][['epoca', id_col_d6, 'classe_predita']].drop_duplicates()
+                df_sankey_sub = pd.merge(df_instancias, df_d6_sub, left_on=['epoca', id_col], right_on=['epoca', id_col_d6], how='inner')
+                target_col = 'classe_predita'
+            else:
+                df_sankey_sub = pd.DataFrame()
         else:
+            df_sankey_sub = pd.DataFrame()
+
+        if df_sankey_sub.empty or not target_col:
+            fig_sankey.add_annotation(text="Não foi possível mapear as transições de classe predita entre as épocas.", showarrow=False)
+        else:
+            # Filtro por classe real (se selecionado e se existir no D6)
+            if classe_sel != 'TODAS' and 'classe_real' in df_sankey_sub.columns:
+                try:
+                    df_sankey_sub = df_sankey_sub[df_sankey_sub['classe_real'] == int(classe_sel)]
+                except (ValueError, TypeError):
+                    pass
+
             if epocas_sel and 'epoca' in df_sankey_sub.columns:
                 df_sankey_sub = df_sankey_sub[(df_sankey_sub['epoca'] >= epocas_sel[0]) & (df_sankey_sub['epoca'] <= epocas_sel[1])]
 
