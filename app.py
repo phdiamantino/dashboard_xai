@@ -10,12 +10,11 @@ import numpy as np
 import dash_bootstrap_components as dbc
 
 # ==========================================
-# 0. DOWNLOAD E EXTRAÇÃO AUTOMÁTICA DOS CSVs (COM BUSCA RECURSIVA)
+# 0. DOWNLOAD E EXTRAÇÃO AUTOMÁTICA DOS CSVs
 # ==========================================
 URL_GOOGLE_DRIVE_ZIP = "https://drive.google.com/uc?export=download&confirm=t&id=16E8yydOSbV6RwlhVPW5in_lIQr7CcjZm"
 
 def baixar_e_descompactar_dados():
-    # Verifica se o arquivo essencial já está na raiz
     if not os.path.exists("resumo_explicacoes_breast_cancer.csv"):
         print("[Início] Baixando arquivos de dados do Google Drive...")
         try:
@@ -29,7 +28,6 @@ def baixar_e_descompactar_dados():
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(".")
             
-            # Varre subpastas para encontrar e mover todos os CSVs para a raiz
             for root, dirs, files in os.walk("."):
                 for file in files:
                     if file.endswith(".csv"):
@@ -71,11 +69,11 @@ def carregar_csv(nome_base, dataset_sel):
 # 2. INICIALIZAÇÃO DA APLICAÇÃO DASH
 # ==========================================
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
-server = app.server  # Essencial para o Render / Gunicorn
+server = app.server
 
 app.layout = html.Div([
     dbc.NavbarSimple(
-        brand="Dashboard Analítico XAI (Multi-Dataset)",
+        brand="Dashboard Analítico XAI (Multi-Dataset & Visualizações Auxiliares)",
         color="light",
         dark=False,
         fluid=True,
@@ -98,21 +96,22 @@ app.layout = html.Div([
     ),
 
     dbc.Container([
+        # Linha de Filtros Globais
         dbc.Row([
             dbc.Col([
                 html.Label("Método XAI:"),
                 dcc.Dropdown(id='dropdown-metodo', options=[], clearable=False)
             ], width=4),
             dbc.Col([
-                html.Label("Mapeamento de Cores (Sankey):"),
+                html.Label("Métrica Auxiliar (Estabilidade):"),
                 dcc.Dropdown(
-                    id='dropdown-cor-metrica',
+                    id='dropdown-metrica-estabilidade',
                     options=[
-                        {'label': 'Classe Predita Dominante', 'value': 'classe'},
-                        {'label': 'Taxa de Confiança', 'value': 'confianca'},
-                        {'label': 'Taxa de Erro', 'value': 'erro'}
+                        {'label': 'Correlação de Spearman (Ranking)', 'value': 'spearman'},
+                        {'label': 'MAD (Desvio Absoluto Médio)', 'value': 'mad_importancia'},
+                        {'label': 'Variância de Importância', 'value': 'variancia_importancia'}
                     ],
-                    value='classe',
+                    value='spearman',
                     clearable=False
                 )
             ], width=4),
@@ -122,6 +121,7 @@ app.layout = html.Div([
             ], width=4),
         ], className="my-3"),
 
+        # RangeSlider Temporal
         dbc.Row([
             dbc.Col([
                 html.Label("Intervalo de Épocas (Brushing Temporal):"),
@@ -129,27 +129,46 @@ app.layout = html.Div([
             ], width=12)
         ], className="mb-4"),
 
+        # Linha 1: Métricas de Treino / Épocas (Auxiliar) & Heatmap Principal
         dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Performance do Modelo ao Longo das Épocas (Loss & Accuracy)"),
+                    dbc.CardBody([dcc.Graph(id='metrics-epochs-graph')])
+                ], className="shadow-sm mb-4")
+            ], width=12, lg=6),
+
             dbc.Col([
                 dbc.Card([
                     dbc.CardHeader("Resumo Global / Heatmap de Importância"),
                     dbc.CardBody([dcc.Graph(id='heatmap-graph')])
                 ], className="shadow-sm mb-4")
             ], width=12, lg=6),
+        ]),
 
+        # Linha 2: Redução de Dimensionalidade & Estabilidade XAI (Auxiliar)
+        dbc.Row([
             dbc.Col([
                 dbc.Card([
                     dbc.CardHeader("Redução de Dimensionalidade (t-SNE / PCA)"),
                     dbc.CardBody([dcc.Graph(id='tsne-graph')])
                 ], className="shadow-sm mb-4")
             ], width=12, lg=6),
+
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Métricas de Estabilidade e Concordância XAI"),
+                    dbc.CardBody([dcc.Graph(id='stability-graph')])
+                ], className="shadow-sm mb-4")
+            ], width=12, lg=6),
         ]),
 
+        # Linha 3: Visualização Completa (Sankey Temporal)
         dbc.Row([
             dbc.Col([
                 dbc.Card([
                     dbc.CardHeader("Fluxos Temporais de Transições (Sankey)"),
-                    dbc.CardBody([dcc.Graph(id='sankey-graph', style={'height': '650px'})])
+                    dbc.CardBody([dcc.Graph(id='sankey-graph', style={'height': '600px'})])
                 ], className="shadow-sm mb-4")
             ], width=12)
         ])
@@ -190,22 +209,38 @@ def update_options(dataset_sel):
     return options_metodo, val_metodo, options_classe, min_ep, max_ep, marks_ep, [min_ep, max_ep]
 
 @app.callback(
-    [Output('heatmap-graph', 'figure'),
+    [Output('metrics-epochs-graph', 'figure'),
+     Output('heatmap-graph', 'figure'),
      Output('tsne-graph', 'figure'),
+     Output('stability-graph', 'figure'),
      Output('sankey-graph', 'figure')],
     [Input('dropdown-dataset', 'value'),
      Input('dropdown-metodo', 'value'),
-     Input('dropdown-cor-metrica', 'value'),
+     Input('dropdown-metrica-estabilidade', 'value'),
      Input('dropdown-classe', 'value'),
      Input('slider-epocas', 'value')]
 )
-def update_graphs(dataset_sel, metodo_sel, cor_metrica_sel, classe_sel, epocas_sel):
+def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_sel):
+    df_d2 = carregar_csv("metricas_epocas", dataset_sel)
     df_d4 = carregar_csv("resumo_explicacoes", dataset_sel)
     df_d6 = carregar_csv("projecao_tsne_epocas", dataset_sel)
-    df_d3 = carregar_csv("explicacoes_instancias", dataset_sel)
-    df_d2 = carregar_csv("metricas_epocas", dataset_sel)
+    df_d5 = carregar_csv("metricas_estabilidade_concordancia", dataset_sel)
 
-    # 1. Heatmap
+    # 1. Gráfico Auxiliar: Métricas por Época (Dataset 2)
+    fig_metrics = go.Figure()
+    if not df_d2.empty and 'epoca' in df_d2.columns:
+        fig_metrics.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2['accuracy'], mode='lines+markers', name='Acurácia'))
+        if 'loss_validacao' in df_d2.columns:
+            fig_metrics.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2['loss_validacao'], mode='lines+markers', name='Loss Validação', yaxis='y2'))
+        fig_metrics.update_layout(
+            title="Evolução da Acurácia e Loss por Época",
+            yaxis=dict(title="Acurácia"),
+            yaxis2=dict(title="Loss", overlaying='y', side='right'),
+            margin=dict(t=30, b=30, l=40, r=40),
+            legend=dict(x=0.01, y=0.99)
+        )
+
+    # 2. Heatmap (Dataset 4)
     fig_heat = go.Figure()
     if not df_d4.empty:
         df_h_sub = df_d4[(df_d4['metodo_xai'] == metodo_sel)]
@@ -214,7 +249,7 @@ def update_graphs(dataset_sel, metodo_sel, cor_metrica_sel, classe_sel, epocas_s
             fig_heat = go.Figure(data=go.Heatmap(z=piv.values, x=piv.columns, y=piv.index, colorscale='Viridis'))
     fig_heat.update_layout(title=f"Heatmap de Importância ({metodo_sel})", margin=dict(t=30, b=30, l=50, r=20))
 
-    # 2. t-SNE / PCA
+    # 3. t-SNE / PCA (Dataset 6)
     fig_tsne = go.Figure()
     if not df_d6.empty:
         df_t_sub = df_d6[(df_d6['metodo_xai'] == metodo_sel)]
@@ -227,12 +262,23 @@ def update_graphs(dataset_sel, metodo_sel, cor_metrica_sel, classe_sel, epocas_s
             ))
     fig_tsne.update_layout(title=f"Projeção t-SNE ({metodo_sel})", margin=dict(t=30, b=30, l=30, r=20))
 
-    # 3. Sankey
+    # 4. Gráfico Auxiliar: Estabilidade e Concordância (Dataset 5)
+    fig_stab = go.Figure()
+    if not df_d5.empty:
+        df_s_sub = df_d5[(df_d5['tipo_metrica'] == metodo_sel) & (df_d5['metrica'] == metrica_est_sel)]
+        if not df_s_sub.empty:
+            fig_stab = go.Figure(data=go.Scatter(
+                x=df_s_sub['epoca_destino'], y=df_s_sub['valor_metrica'],
+                mode='lines+markers', name=metrica_est_sel
+            ))
+    fig_stab.update_layout(title=f"Estabilidade ({metrica_est_sel}) - {metodo_sel}", margin=dict(t=30, b=30, l=40, r=20))
+
+    # 5. Sankey
     fig_sankey = go.Figure()
-    fig_sankey.add_annotation(text="Sankey pronto para exibição temporal", showarrow=False)
+    fig_sankey.add_annotation(text="Sankey temporal pronto", showarrow=False)
     fig_sankey.update_layout(title="Transições Temporais (Sankey)")
 
-    return fig_heat, fig_tsne, fig_sankey
+    return fig_metrics, fig_heat, fig_tsne, fig_stab, fig_sankey
 
 if __name__ == '__main__':
     app.run(debug=False)
