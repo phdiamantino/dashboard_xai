@@ -294,48 +294,76 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             fig_stab = go.Figure(data=go.Scatter(x=df_s_sub['epoca_destino'], y=df_s_sub['valor_metrica'], mode='lines+markers', name=metrica_est_sel))
             fig_stab.update_layout(title=f"Estabilidade ({metrica_est_sel}) - {metodo_sel}", margin=dict(t=30, b=30, l=40, r=20))
 
-    # 5. Fluxos Temporais (Sankey Dinâmico)
+    # 5. Fluxos Temporais (Sankey Dinâmico e Flexível)
     fig_sankey = go.Figure()
-    if df_d3.empty or 'metodo_xai' not in df_d3.columns:
-        fig_sankey.add_annotation(text="Arquivo CSV de explicações de instâncias não disponível para o Sankey.", showarrow=False)
+    if df_d3.empty:
+        fig_sankey.add_annotation(text="Arquivo CSV explicacoes_instancias não encontrado.", showarrow=False)
     else:
-        df_sankey_sub = df_d3[df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
-        
-        if classe_sel != 'TODAS' and 'classe_real' in df_sankey_sub.columns:
-            df_sankey_sub = df_sankey_sub[df_sankey_sub['classe_real'] == int(classe_sel)]
-            
-        if epocas_sel and 'epoca' in df_sankey_sub.columns:
-            df_sankey_sub = df_sankey_sub[(df_sankey_sub['epoca'] >= epocas_sel[0]) & (df_sankey_sub['epoca'] <= epocas_sel[1])]
-            
-        epocas_disponiveis = sorted(df_sankey_sub['epoca'].unique()) if 'epoca' in df_sankey_sub.columns else []
-        
-        if len(epocas_disponiveis) < 2:
-            fig_sankey.add_annotation(text="Selecione um intervalo com pelo menos 2 épocas para gerar o fluxo Sankey.", showarrow=False)
+        # Detecta dinamicamente a coluna de id de instância
+        id_col = None
+        for col in ['instance_id', 'instancia_id', 'instancia', 'id_instancia', 'id', 'sample_id']:
+            if col in df_d3.columns:
+                id_col = col
+                break
+
+        # Detecta dinamicamente a coluna de classe/grupo predito
+        target_col = None
+        for col in ['classe_predita', 'cluster_id', 'predicao', 'y_pred', 'target_pred', 'pred']:
+            if col in df_d3.columns:
+                target_col = col
+                break
+
+        if not id_col or not target_col:
+            fig_sankey.add_annotation(
+                text=f"Colunas para Sankey não mapeadas. Encontradas: {list(df_d3.columns)}",
+                showarrow=False
+            )
         else:
-            nodes = []
-            sources, targets, values = [], [], []
-            node_map = {}
-            
-            target_col = 'classe_predita' if 'classe_predita' in df_sankey_sub.columns else ('cluster_id' if 'cluster_id' in df_sankey_sub.columns else None)
-            map_cls = Mapeamento_classes_dataset(dataset_sel)
-            
-            if target_col and 'instance_id' in df_sankey_sub.columns:
+            df_sankey_sub = df_d3.copy()
+            if 'metodo_xai' in df_sankey_sub.columns:
+                df_sankey_sub = df_sankey_sub[df_sankey_sub['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
+
+            # Filtro por classe real (se existir)
+            real_col = next((c for c in ['classe_real', 'y_real', 'target_real', 'target'] if c in df_sankey_sub.columns), None)
+            if classe_sel != 'TODAS' and real_col:
+                try:
+                    df_sankey_sub = df_sankey_sub[df_sankey_sub[real_col] == int(classe_sel)]
+                except ValueError:
+                    pass
+
+            if epocas_sel and 'epoca' in df_sankey_sub.columns:
+                df_sankey_sub = df_sankey_sub[(df_sankey_sub['epoca'] >= epocas_sel[0]) & (df_sankey_sub['epoca'] <= epocas_sel[1])]
+
+            epocas_disponiveis = sorted(df_sankey_sub['epoca'].unique()) if 'epoca' in df_sankey_sub.columns else []
+
+            if len(epocas_disponiveis) < 2:
+                fig_sankey.add_annotation(text="Selecione um intervalo com pelo menos 2 épocas para gerar o fluxo Sankey.", showarrow=False)
+            else:
+                nodes = []
+                sources, targets, values = [], [], []
+                node_map = {}
+                map_cls = Mapeamento_classes_dataset(dataset_sel)
+
                 for ep in epocas_disponiveis:
                     grupos = df_sankey_sub[df_sankey_sub['epoca'] == ep][target_col].unique()
                     for g in grupos:
-                        label_g = map_cls.get(int(g), f"Grupo {g}") if isinstance(g, (int, float, str)) and str(g).isdigit() else f"Grupo {g}"
-                        node_name = f"Época {ep}: {label_g}"
+                        try:
+                            g_int = int(g)
+                            label_g = map_cls.get(g_int, f"Classe {g}")
+                        except (ValueError, TypeError):
+                            label_g = f"Grupo {g}"
+                        node_name = f"Ép {ep}: {label_g}"
                         node_map[(ep, g)] = len(nodes)
                         nodes.append(node_name)
-                        
+
                 for i in range(len(epocas_disponiveis) - 1):
                     ep1, ep2 = epocas_disponiveis[i], epocas_disponiveis[i+1]
-                    df_e1 = df_sankey_sub[df_sankey_sub['epoca'] == ep1][['instance_id', target_col]]
-                    df_e2 = df_sankey_sub[df_sankey_sub['epoca'] == ep2][['instance_id', target_col]]
-                    
-                    merged = pd.merge(df_e1, df_e2, on='instance_id', suffixes=('_src', '_tgt'))
+                    df_e1 = df_sankey_sub[df_sankey_sub['epoca'] == ep1][[id_col, target_col]]
+                    df_e2 = df_sankey_sub[df_sankey_sub['epoca'] == ep2][[id_col, target_col]]
+
+                    merged = pd.merge(df_e1, df_e2, on=id_col, suffixes=('_src', '_tgt'))
                     trans = merged.groupby([f'{target_col}_src', f'{target_col}_tgt']).size().reset_index(name='count')
-                    
+
                     for _, row in trans.iterrows():
                         src_key = (ep1, row[f'{target_col}_src'])
                         tgt_key = (ep2, row[f'{target_col}_tgt'])
@@ -343,14 +371,15 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                             sources.append(node_map[src_key])
                             targets.append(node_map[tgt_key])
                             values.append(row['count'])
-                            
-                fig_sankey = go.Figure(data=[go.Sankey(
-                    node=dict(pad=15, thickness=20, line=dict(color="black", width=0.5), label=nodes, color="blue"),
-                    link=dict(source=sources, target=targets, value=values, color="rgba(160, 160, 160, 0.4)")
-                )])
-                fig_sankey.update_layout(title=f"Fluxos Temporais de Transição ({metodo_sel})", margin=dict(t=30, b=30, l=30, r=30))
-            else:
-                fig_sankey.add_annotation(text="Colunas de classe/instância ausentes para criar os fluxos.", showarrow=False)
+
+                if sources and targets:
+                    fig_sankey = go.Figure(data=[go.Sankey(
+                        node=dict(pad=15, thickness=20, line=dict(color="black", width=0.5), label=nodes, color="#1f77b4"),
+                        link=dict(source=sources, target=targets, value=values, color="rgba(160, 160, 160, 0.4)")
+                    )])
+                    fig_sankey.update_layout(title=f"Fluxos Temporais de Transição ({metodo_sel})", margin=dict(t=30, b=30, l=30, r=30))
+                else:
+                    fig_sankey.add_annotation(text="Sem transições registradas para o intervalo de épocas selecionado.", showarrow=False)
 
     return fig_metrics, fig_heat, fig_tsne, fig_stab, fig_sankey
 
