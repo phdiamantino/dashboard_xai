@@ -167,7 +167,7 @@ app.layout = html.Div([
             ], width=12, lg=6),
         ]),
 
-        # Linha 3: Sankey Binário Fidedigno com Alturas Dinâmicas e Tooltips de Mouseover
+        # Linha 3: Sankey Binário Fidedigno com Contagem Pura de Instâncias
         dbc.Row([
             dbc.Col([
                 dbc.Card([
@@ -237,7 +237,6 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
     df_d4 = carregar_csv_seguro("resumo_explicacoes", dataset_sel)
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
     df_d5 = carregar_csv_seguro("metricas_estabilidade_concordancia", dataset_sel)
-    df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
 
     # 1. Performance + Estabilidade XAI
     fig_combined = go.Figure()
@@ -327,36 +326,22 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             ))
             fig_dim_aux.update_layout(title=f"Dispersão da Componente Principal por Época ({metodo_sel})", margin=dict(t=30, b=30, l=40, r=20))
 
-    # 5. Fluxos Temporais (SANKEY BINÁRIO COM 2 CLASSES E ALTURAS REATIVAS AO XAI)
+    # 5. Fluxos Temporais (SANKEY REATIVO COM CONTAGEM PURA DE INSTÂNCIAS E FILTRAGEM DE MÉTODO)
     fig_sankey = go.Figure()
-    if df_d3.empty or df_d6.empty:
-        fig_sankey.add_annotation(text="Dados de explicações/projeções não encontrados.", showarrow=False)
+    if df_d6.empty:
+        fig_sankey.add_annotation(text="Dados de projeções não encontrados.", showarrow=False)
     else:
-        id_col = next((c for c in ['instancia_id', 'instance_id', 'id', 'sample_id'] if c in df_d3.columns), None)
         id_col_d6 = next((c for c in ['instancia_id', 'instance_id', 'id', 'sample_id'] if c in df_d6.columns), None)
-        
-        df_d3_met = df_d3[df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
         df_d6_met = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
 
-        if not df_d3_met.empty and not df_d6_met.empty and id_col and id_col_d6:
-            if 'importancia_absoluta' in df_d3_met.columns:
-                df_xai_weight = df_d3_met.groupby(['epoca', id_col])['importancia_absoluta'].mean().reset_index()
-            else:
-                df_xai_weight = df_d3_met.groupby(['epoca', id_col])['valor_atribuicao'].apply(lambda x: x.abs().mean()).reset_index(name='importancia_absoluta')
-
-            cols_d6 = ['epoca', id_col_d6, 'classe_predita']
+        if not df_d6_met.empty and id_col_d6:
+            target_col = 'classe_predita'  # Estritamente binário (0 e 1)
+            
+            cols_d6 = ['epoca', id_col_d6, target_col]
             if 'classe_real' in df_d6_met.columns:
                 cols_d6.append('classe_real')
                 
-            df_sankey_base = pd.merge(
-                df_xai_weight,
-                df_d6_met[cols_d6].drop_duplicates(),
-                left_on=['epoca', id_col],
-                right_on=['epoca', id_col_d6],
-                how='inner'
-            )
-
-            target_col = 'classe_predita'  # Estritamente binário (0 e 1)
+            df_sankey_base = df_d6_met[cols_d6].drop_duplicates()
 
             if classe_sel != 'TODAS' and 'classe_real' in df_sankey_base.columns:
                 try:
@@ -402,13 +387,12 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
 
                 for i in range(len(epocas_disponiveis) - 1):
                     ep1, ep2 = epocas_disponiveis[i], epocas_disponiveis[i+1]
-                    df_e1 = df_sankey_base[df_sankey_base['epoca'] == ep1][[id_col, target_col, 'importancia_absoluta']]
-                    df_e2 = df_sankey_base[df_sankey_base['epoca'] == ep2][[id_col, target_col]]
+                    df_e1 = df_sankey_base[df_sankey_base['epoca'] == ep1][[id_col_d6, target_col]]
+                    df_e2 = df_sankey_base[df_sankey_base['epoca'] == ep2][[id_col_d6, target_col]]
 
-                    merged = pd.merge(df_e1, df_e2, on=id_col, suffixes=('_src', '_tgt'))
-                    trans = merged.groupby([f'{target_col}_src', f'{target_col}_tgt']).agg(
-                        count=('importancia_absoluta', 'sum')
-                    ).reset_index()
+                    merged = pd.merge(df_e1, df_e2, on=id_col_d6, suffixes=('_src', '_tgt'))
+                    # Contagem PURA de instâncias (volume real correspondente ao dataset)
+                    trans = merged.groupby([f'{target_col}_src', f'{target_col}_tgt']).size().reset_index(name='count')
 
                     for _, row in trans.iterrows():
                         src_grp = row[f'{target_col}_src']
@@ -419,7 +403,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                         if src_key in node_map and tgt_key in node_map:
                             sources.append(node_map[src_key])
                             targets.append(node_map[tgt_key])
-                            values.append(float(row['count']))
+                            values.append(int(row['count']))
                             
                             try:
                                 src_int = int(src_grp)
@@ -443,7 +427,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                             target=targets,
                             value=values,
                             color=link_colors,
-                            hovertemplate='Origem -> Destino<br>Peso Atributivo do XAI: %{value:.2f}<extra></extra>'
+                            hovertemplate='Origem -> Destino<br>Quantidade de Instâncias: %{value}<extra></extra>'
                         )
                     )])
                     
