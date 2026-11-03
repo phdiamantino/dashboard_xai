@@ -41,7 +41,7 @@ def preparar_dados():
 preparar_dados()
 
 # ==========================================
-# 1. FUNÇÕES DE CARREGAMENTO ULTRA-SEGURO E MAPEAMENTO
+# 1. FUNÇÕES DE CARREGAMENTO SEGURO E MAPEAMENTO
 # ==========================================
 def carregar_csv_seguro(nome_base, dataset_sel):
     padroes = [f"**/{nome_base}_{dataset_sel}.csv", f"**/{nome_base}.csv"]
@@ -61,7 +61,6 @@ def carregar_csv_seguro(nome_base, dataset_sel):
     return pd.DataFrame()
 
 def Mapeamento_classes_dataset(dataset_name):
-    # Dicionário alinhado perfeitamente às propriedades dos 3 Datasets
     if dataset_name == 'breast_cancer':
         return {0: "Benigno", 1: "Maligno"}
     elif dataset_name == 'wine_quality':
@@ -134,7 +133,7 @@ app.layout = html.Div([
             ], width=12)
         ], className="mb-4"),
 
-        # Linha 1: Performance + Estabilidade XAI integradas e Heatmap
+        # Linha 1: Performance + Estabilidade XAI e Heatmap
         dbc.Row([
             dbc.Col([
                 dbc.Card([
@@ -151,7 +150,7 @@ app.layout = html.Div([
             ], width=12, lg=6),
         ]),
 
-        # Linha 2: Redução de Dimensionalidade Principal (t-SNE) e Visualização Auxiliar
+        # Linha 2: Redução de Dimensionalidade (t-SNE) e Auxiliar
         dbc.Row([
             dbc.Col([
                 dbc.Card([
@@ -168,7 +167,7 @@ app.layout = html.Div([
             ], width=12, lg=6),
         ]),
 
-        # Linha 3: Sankey Fidedigno e Dinâmico
+        # Linha 3: Sankey Dinâmico e Reativo
         dbc.Row([
             dbc.Col([
                 dbc.Card([
@@ -314,7 +313,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             ))
             fig_dim_aux.update_layout(title=f"Dispersão da Componente Principal por Época ({metodo_sel})", margin=dict(t=30, b=30, l=40, r=20))
 
-    # 5. Fluxos Temporais (SANKEY REATIVO COM OPACIDADE, CORES E BASEADO NO NOTEBOOK COLAB)
+    # 5. Fluxos Temporais (SANKEY REATIVO COM ALTURAS DINÂMICAS E OPACIDADE)
     fig_sankey = go.Figure()
     if df_d6.empty:
         fig_sankey.add_annotation(text="Dados de projeções não encontrados.", showarrow=False)
@@ -323,8 +322,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
         df_d6_met = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
 
         if not df_d6_met.empty and id_col_d6:
-            # O SEGREDO DO NOTEBOOK: Se a clusterização das explicações existir, ele muda com o método.
-            # Caso não haja cluster_id explícito, ele usa a classe predita, mantendo a coerência.
+            # Utiliza cluster_id se disponível para variar as alturas dinamicamente por método XAI
             target_col = 'cluster_id' if 'cluster_id' in df_d6_met.columns else 'classe_predita'
             
             cols_d6 = ['epoca', id_col_d6, target_col]
@@ -333,7 +331,6 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                 
             df_sankey_base = df_d6_met[cols_d6].drop_duplicates()
 
-            # Filtro interativo de Classe Global
             if classe_sel != 'TODAS' and 'classe_real' in df_sankey_base.columns:
                 try:
                     df_sankey_base = df_sankey_base[df_sankey_base['classe_real'] == int(classe_sel)]
@@ -354,21 +351,19 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                 node_map = {}
                 map_cls = Mapeamento_classes_dataset(dataset_sel)
 
-                # Cores vibrantes com opacidade (rgba) fiéis à imagem anexada
                 class_color_map = {
-                    0: {'node': '#1f77b4', 'link': 'rgba(31, 119, 180, 0.45)'}, # Azul (Benigno / Baixo Risco)
-                    1: {'node': '#ff7f0e', 'link': 'rgba(255, 127, 14, 0.45)'}, # Laranja (Maligno / Alto Risco)
-                    2: {'node': '#2ca02c', 'link': 'rgba(44, 160, 44, 0.45)'},  # Verde
-                    3: {'node': '#d62728', 'link': 'rgba(214, 39, 40, 0.45)'}   # Vermelho
+                    0: {'node': '#1f77b4', 'link': 'rgba(31, 119, 180, 0.45)'},
+                    1: {'node': '#ff7f0e', 'link': 'rgba(255, 127, 14, 0.45)'},
+                    2: {'node': '#2ca02c', 'link': 'rgba(44, 160, 44, 0.45)'},
+                    3: {'node': '#d62728', 'link': 'rgba(214, 39, 40, 0.45)'}
                 }
 
-                # Construção dos Nós
                 for ep in epocas_disponiveis:
                     grupos = sorted(df_sankey_base[df_sankey_base['epoca'] == ep][target_col].dropna().unique())
                     for g in grupos:
                         try:
                             g_int = int(g)
-                            label_g = map_cls.get(g_int, f"Classe {g}")
+                            label_g = map_cls.get(g_int, f"Cluster {g}" if target_col == 'cluster_id' else f"Classe {g}")
                         except (ValueError, TypeError):
                             g_int = 0
                             label_g = f"Grupo {g}"
@@ -377,10 +372,9 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                         node_map[(ep, g)] = len(nodes)
                         nodes.append(node_name)
                         
-                        c_info = class_color_map.get(g_int, {'node': '#1f77b4', 'link': 'rgba(31, 119, 180, 0.45)'})
+                        c_info = class_color_map.get(g_int % 4, {'node': '#1f77b4', 'link': 'rgba(31, 119, 180, 0.45)'})
                         node_colors.append(c_info['node'])
 
-                # Construção das Conexões (Links)
                 for i in range(len(epocas_disponiveis) - 1):
                     ep1, ep2 = epocas_disponiveis[i], epocas_disponiveis[i+1]
                     df_e1 = df_sankey_base[df_sankey_base['epoca'] == ep1][[id_col_d6, target_col]]
@@ -405,7 +399,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                             except (ValueError, TypeError):
                                 src_int = 0
                             
-                            l_color = class_color_map.get(src_int, {'link': 'rgba(160, 160, 160, 0.4)'})['link']
+                            l_color = class_color_map.get(src_int % 4, {'link': 'rgba(160, 160, 160, 0.4)'})['link']
                             link_colors.append(l_color)
 
                 if sources and targets:
