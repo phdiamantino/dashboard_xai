@@ -239,7 +239,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
     df_d5 = carregar_csv_seguro("metricas_estabilidade_concordancia", dataset_sel)
     df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
 
-    # 1. Gráfico Combinado: Acurácia, Loss e Estabilidade XAI
+    # 1. Performance + Estabilidade XAI
     fig_combined = go.Figure()
     if df_d2.empty:
         fig_combined.add_annotation(text="Dados de métricas de treino não encontrados.", showarrow=False)
@@ -272,7 +272,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             legend=dict(x=0.01, y=0.99, orientation='h')
         )
 
-    # 2. Heatmap de Importância
+    # 2. Heatmap
     fig_heat = go.Figure()
     if df_d4.empty:
         fig_heat.add_annotation(text="Arquivo CSV de resumo_explicacoes não encontrado.", showarrow=False)
@@ -286,7 +286,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             fig_heat = go.Figure(data=go.Heatmap(z=piv.values, x=piv.columns, y=piv.index, colorscale='Viridis'))
             fig_heat.update_layout(title=f"Heatmap de Importância ({metodo_sel})", margin=dict(t=30, b=30, l=50, r=20))
 
-    # 3. Projeção t-SNE Principal
+    # 3. Projeção t-SNE
     fig_tsne = go.Figure()
     if df_d6.empty:
         fig_tsne.add_annotation(text="Arquivo CSV de projecao_tsne não encontrado.", showarrow=False)
@@ -301,7 +301,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             fig_tsne = go.Figure(data=go.Scatter(x=df_t_sub['tsne_dim_1'], y=df_t_sub['tsne_dim_2'], mode='markers', marker=dict(color=df_t_sub[color_col], colorscale='Plasma', opacity=0.7)))
             fig_tsne.update_layout(title=f"Projeção t-SNE Espacial ({metodo_sel})", margin=dict(t=30, b=30, l=30, r=20))
 
-    # 4. Visualização Auxiliar de Redução de Dimensionalidade
+    # 4. Auxiliar de Dimensionalidade
     fig_dim_aux = go.Figure()
     if df_d6.empty or 'tsne_dim_1' not in df_d6.columns:
         fig_dim_aux.add_annotation(text="Dados de projeção de dimensionalidade não disponíveis.", showarrow=False)
@@ -314,7 +314,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             ))
             fig_dim_aux.update_layout(title=f"Dispersão da Componente Principal por Época ({metodo_sel})", margin=dict(t=30, b=30, l=40, r=20))
 
-    # 5. Fluxos Temporais (SANKEY REATIVO COM CORES E OPACIDADE)
+    # 5. Fluxos Temporais (SANKEY REATIVO COM ATRIBUIÇÃO XAI E OPACIDADE)
     fig_sankey = go.Figure()
     if df_d3.empty or df_d6.empty:
         fig_sankey.add_annotation(text="Dados de explicações/projeções não encontrados.", showarrow=False)
@@ -322,15 +322,13 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
         id_col = next((c for c in ['instancia_id', 'instance_id', 'id', 'sample_id'] if c in df_d3.columns), None)
         id_col_d6 = next((c for c in ['instancia_id', 'instance_id', 'id', 'sample_id'] if c in df_d6.columns), None)
         
-        # Filtra pelo Método XAI Selecionado (Garante reatividade completa)
         df_d3_met = df_d3[df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
         df_d6_met = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
 
         if not df_d3_met.empty and not df_d6_met.empty and id_col and id_col_d6:
-            # Agrupa a intensidade atributiva total da instância por época para dar o perfil do Método XAI
-            df_xai_profile = df_d3_met.groupby(['epoca', id_col])['valor_atribuicao'].sum().reset_index()
+            # Agrupa o perfil atributivo total do Método XAI por instância e época
+            df_xai_profile = df_d3_met.groupby(['epoca', id_col])['valor_atribuicao'].mean().reset_index()
             
-            # Merge com D6 para obter a classe predita e real
             cols_d6 = ['epoca', id_col_d6, 'classe_predita']
             if 'classe_real' in df_d6_met.columns:
                 cols_d6.append('classe_real')
@@ -342,6 +340,13 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                 right_on=['epoca', id_col_d6],
                 how='inner'
             )
+
+            # Categoriza por decis/faixas de atribuição do Método XAI para garantir variação entre métodos
+            try:
+                df_sankey_base['faixa_xai'] = pd.qcut(df_sankey_base['valor_atribuicao'], q=2, labels=[0, 1], duplicates='drop')
+                df_sankey_base['grupo_sankey'] = df_sankey_base['classe_predita'].astype(str) + "_" + df_sankey_base['faixa_xai'].astype(str)
+            except Exception:
+                df_sankey_base['grupo_sankey'] = df_sankey_base['classe_predita']
 
             if classe_sel != 'TODAS' and 'classe_real' in df_sankey_base.columns:
                 try:
@@ -363,12 +368,12 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                 node_map = {}
                 map_cls = Mapeamento_classes_dataset(dataset_sel)
 
-                # Cores distintas com transparência por classe (Estilo elegante da imagem)
+                # Mapeamento de cores vibrantes com opacidade nos links
                 class_color_map = {
-                    0: {'node': '#1f77b4', 'link': 'rgba(31, 119, 180, 0.45)'},    # Azul Benigno/Classe 0
-                    1: {'node': '#ff7f0e', 'link': 'rgba(255, 127, 14, 0.45)'},    # Laranja Maligno/Classe 1
-                    2: {'node': '#2ca02c', 'link': 'rgba(44, 160, 44, 0.45)'},     # Verde
-                    3: {'node': '#d62728', 'link': 'rgba(214, 39, 40, 0.45)'}      # Vermelho
+                    0: {'node': '#1f77b4', 'link': 'rgba(31, 119, 180, 0.45)'},
+                    1: {'node': '#ff7f0e', 'link': 'rgba(255, 127, 14, 0.45)'},
+                    2: {'node': '#2ca02c', 'link': 'rgba(44, 160, 44, 0.45)'},
+                    3: {'node': '#d62728', 'link': 'rgba(214, 39, 40, 0.45)'}
                 }
 
                 target_col = 'classe_predita'
@@ -387,8 +392,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                         node_map[(ep, g)] = len(nodes)
                         nodes.append(node_name)
                         
-                        # Atribui a cor do nó
-                        c_info = class_color_map.get(g_int, {'node': '#7f7f7f', 'link': 'rgba(127, 127, 127, 0.4)'})
+                        c_info = class_color_map.get(g_int, {'node': '#1f77b4', 'link': 'rgba(31, 119, 180, 0.45)'})
                         node_colors.append(c_info['node'])
 
                 for i in range(len(epocas_disponiveis) - 1):
@@ -410,7 +414,6 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                             targets.append(node_map[tgt_key])
                             values.append(row['count'])
                             
-                            # Define a cor do fluxo/link com transparência basada na classe de origem
                             try:
                                 src_int = int(src_grp)
                             except (ValueError, TypeError):
@@ -423,7 +426,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                     fig_sankey = go.Figure(data=[go.Sankey(
                         node=dict(
                             pad=20,
-                            thickness=18,
+                            thickness=20,
                             line=dict(color="black", width=0.5),
                             label=nodes,
                             color=node_colors
