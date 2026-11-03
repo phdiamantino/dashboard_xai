@@ -150,7 +150,7 @@ app.layout = html.Div([
             ], width=12, lg=6),
         ]),
 
-        # Linha 2: Redução de Dimensionalidade (t-SNE) e Auxiliar
+        # Linha 2: Redução de Dimensionalidade (t-SNE) e Auxiliar com Tooltips completos
         dbc.Row([
             dbc.Col([
                 dbc.Card([
@@ -167,7 +167,7 @@ app.layout = html.Div([
             ], width=12, lg=6),
         ]),
 
-        # Linha 3: Sankey Dinâmico e Reativo
+        # Linha 3: Sankey Dinâmico com Altura e Fluxos Variados
         dbc.Row([
             dbc.Col([
                 dbc.Card([
@@ -237,6 +237,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
     df_d4 = carregar_csv_seguro("resumo_explicacoes", dataset_sel)
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
     df_d5 = carregar_csv_seguro("metricas_estabilidade_concordancia", dataset_sel)
+    df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
 
     # 1. Performance + Estabilidade XAI
     fig_combined = go.Figure()
@@ -271,7 +272,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             legend=dict(x=0.01, y=0.99, orientation='h')
         )
 
-    # 2. Heatmap
+    # 2. Heatmap com Tooltips customizados (Hover)
     fig_heat = go.Figure()
     if df_d4.empty:
         fig_heat.add_annotation(text="Arquivo CSV de resumo_explicacoes não encontrado.", showarrow=False)
@@ -282,22 +283,35 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
         if not df_h_sub.empty:
             val_col = 'importancia_media' if 'importancia_media' in df_h_sub.columns else df_h_sub.columns[-1]
             piv = df_h_sub.pivot_table(index='feature', columns='epoca', values=val_col, fill_value=0)
-            fig_heat = go.Figure(data=go.Heatmap(z=piv.values, x=piv.columns, y=piv.index, colorscale='Viridis'))
+            fig_heat = go.Figure(data=go.Heatmap(
+                z=piv.values, x=piv.columns, y=piv.index, colorscale='Viridis',
+                hovertemplate='Feature: %{y}<br>Época: %{x}<br>Importância Média: %{z:.4f}<extra></extra>'
+            ))
             fig_heat.update_layout(title=f"Heatmap de Importância ({metodo_sel})", margin=dict(t=30, b=30, l=50, r=20))
 
-    # 3. Projeção t-SNE
+    # 3. Projeção t-SNE com variáveis detalhadas no Mouseover (HoverTemplate)
     fig_tsne = go.Figure()
     if df_d6.empty:
         fig_tsne.add_annotation(text="Arquivo CSV de projecao_tsne não encontrado.", showarrow=False)
     elif 'metodo_xai' not in df_d6.columns or 'tsne_dim_1' not in df_d6.columns:
         fig_tsne.add_annotation(text="Colunas t-SNE ausentes.", showarrow=False)
     else:
-        df_t_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
+        df_t_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
         if epocas_sel and 'epoca' in df_t_sub.columns:
             df_t_sub = df_t_sub[(df_t_sub['epoca'] >= epocas_sel[0]) & (df_t_sub['epoca'] <= epocas_sel[1])]
+        
         if not df_t_sub.empty:
             color_col = 'classe_predita' if 'classe_predita' in df_t_sub.columns else ('cluster_id' if 'cluster_id' in df_t_sub.columns else df_t_sub.columns[-1])
-            fig_tsne = go.Figure(data=go.Scatter(x=df_t_sub['tsne_dim_1'], y=df_t_sub['tsne_dim_2'], mode='markers', marker=dict(color=df_t_sub[color_col], colorscale='Plasma', opacity=0.7)))
+            id_inst = 'instancia_id' if 'instancia_id' in df_t_sub.columns else ('instance_id' if 'instance_id' in df_t_sub.columns else 'epoca')
+            
+            fig_tsne = go.Figure(data=go.Scatter(
+                x=df_t_sub['tsne_dim_1'], y=df_t_sub['tsne_dim_2'],
+                mode='markers',
+                marker=dict(color=df_t_sub[color_col], colorscale='Plasma', opacity=0.8, size=8),
+                text=df_t_sub[id_inst],
+                customdata=df_t_sub[['epoca', color_col]],
+                hovertemplate='Instância ID: %{text}<br>Época: %{customdata[0]}<br>Classe Predita / Cluster: %{customdata[1]}<br>t-SNE 1: %{x:.2f}<br>t-SNE 2: %{y:.2f}<extra></extra>'
+            ))
             fig_tsne.update_layout(title=f"Projeção t-SNE Espacial ({metodo_sel})", margin=dict(t=30, b=30, l=30, r=20))
 
     # 4. Auxiliar de Dimensionalidade
@@ -313,23 +327,41 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             ))
             fig_dim_aux.update_layout(title=f"Dispersão da Componente Principal por Época ({metodo_sel})", margin=dict(t=30, b=30, l=40, r=20))
 
-    # 5. Fluxos Temporais (SANKEY REATIVO COM ALTURAS DINÂMICAS E OPACIDADE)
+    # 5. Fluxos Temporais (SANKEY REATIVO - Alturas Dinâmicas por Método e Tooltips Detalhados)
     fig_sankey = go.Figure()
-    if df_d6.empty:
-        fig_sankey.add_annotation(text="Dados de projeções não encontrados.", showarrow=False)
+    if df_d3.empty or df_d6.empty:
+        fig_sankey.add_annotation(text="Dados de explicações/projeções não encontrados.", showarrow=False)
     else:
+        id_col = next((c for c in ['instancia_id', 'instance_id', 'id', 'sample_id'] if c in df_d3.columns), None)
         id_col_d6 = next((c for c in ['instancia_id', 'instance_id', 'id', 'sample_id'] if c in df_d6.columns), None)
+        
+        df_d3_met = df_d3[df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
         df_d6_met = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
 
-        if not df_d6_met.empty and id_col_d6:
-            # Utiliza cluster_id se disponível para variar as alturas dinamicamente por método XAI
-            target_col = 'cluster_id' if 'cluster_id' in df_d6_met.columns else 'classe_predita'
+        if not df_d3_met.empty and not df_d6_met.empty and id_col and id_col_d6:
+            # Integração direta com a intensidade de atribuição específica do método XAI para que a altura varie
+            df_xai_profile = df_d3_met.groupby(['epoca', id_col])['valor_atribuicao'].mean().reset_index()
             
-            cols_d6 = ['epoca', id_col_d6, target_col]
+            cols_d6 = ['epoca', id_col_d6, 'classe_predita']
+            if 'cluster_id' in df_d6_met.columns:
+                cols_d6.append('cluster_id')
             if 'classe_real' in df_d6_met.columns:
                 cols_d6.append('classe_real')
                 
-            df_sankey_base = df_d6_met[cols_d6].drop_duplicates()
+            df_sankey_base = pd.merge(
+                df_xai_profile,
+                df_d6_met[cols_d6].drop_duplicates(),
+                left_on=['epoca', id_col],
+                right_on=['epoca', id_col_d6],
+                how='inner'
+            )
+
+            # Garante que a divisão por quartis/decis varie conforme o método XAI selecionado
+            try:
+                df_sankey_base['faixa_atribuicao'] = pd.qcut(df_sankey_base['valor_atribuicao'], q=3, labels=[0, 1, 2], duplicates='drop')
+                target_col = 'faixa_atribuicao'
+            except Exception:
+                target_col = 'cluster_id' if 'cluster_id' in df_sankey_base.columns else 'classe_predita'
 
             if classe_sel != 'TODAS' and 'classe_real' in df_sankey_base.columns:
                 try:
@@ -363,7 +395,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                     for g in grupos:
                         try:
                             g_int = int(g)
-                            label_g = map_cls.get(g_int, f"Cluster {g}" if target_col == 'cluster_id' else f"Classe {g}")
+                            label_g = f"Nível Atribuição {g_int}" if target_col == 'faixa_atribuicao' else map_cls.get(g_int, f"Grupo {g}")
                         except (ValueError, TypeError):
                             g_int = 0
                             label_g = f"Grupo {g}"
@@ -377,10 +409,10 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
 
                 for i in range(len(epocas_disponiveis) - 1):
                     ep1, ep2 = epocas_disponiveis[i], epocas_disponiveis[i+1]
-                    df_e1 = df_sankey_base[df_sankey_base['epoca'] == ep1][[id_col_d6, target_col]]
-                    df_e2 = df_sankey_base[df_sankey_base['epoca'] == ep2][[id_col_d6, target_col]]
+                    df_e1 = df_sankey_base[df_sankey_base['epoca'] == ep1][[id_col, target_col]]
+                    df_e2 = df_sankey_base[df_sankey_base['epoca'] == ep2][[id_col, target_col]]
 
-                    merged = pd.merge(df_e1, df_e2, on=id_col_d6, suffixes=('_src', '_tgt'))
+                    merged = pd.merge(df_e1, df_e2, on=id_col, suffixes=('_src', '_tgt'))
                     trans = merged.groupby([f'{target_col}_src', f'{target_col}_tgt']).size().reset_index(name='count')
 
                     for _, row in trans.iterrows():
@@ -415,7 +447,8 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                             source=sources,
                             target=targets,
                             value=values,
-                            color=link_colors
+                            color=link_colors,
+                            hovertemplate='Origem -> Destino<br>Volume de Instâncias: %{value}<extra></extra>'
                         )
                     )])
                     
