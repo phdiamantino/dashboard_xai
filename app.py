@@ -6,7 +6,9 @@ import gdown
 import dash
 from dash import dcc, html, Input, Output
 import plotly.graph_objects as go
+import plotly.express as px
 import pandas as pd
+from sklearn.decomposition import PCA
 import dash_bootstrap_components as dbc
 
 # ==========================================
@@ -34,7 +36,7 @@ def preparar_dados():
                         if src_path != dst_path and not os.path.exists(dst_path):
                             shutil.move(src_path, dst_path)
                             
-            print("[Sucesso] Dados baixados e organizados na raiz com sucesso!")
+            print("[Sucesso] Dados baixados e organizados com sucesso!")
         except Exception as e:
             print(f"[Erro] Falha grave no download/extração: {e}")
 
@@ -77,7 +79,7 @@ server = app.server
 
 app.layout = html.Div([
     dbc.NavbarSimple(
-        brand="Dashboard Analítico XAI (Multi-Dataset & Diagnóstico Temporal)",
+        brand="Dashboard Analítico XAI & Diagnóstico Temporal de Dimensionalidade",
         color="light",
         dark=False,
         fluid=True,
@@ -87,13 +89,13 @@ app.layout = html.Div([
                 dcc.Dropdown(
                     id='dropdown-dataset',
                     options=[
-                        {'label': 'Breast Cancer', 'value': 'breast_cancer'},
-                        {'label': 'Wine Quality', 'value': 'wine_quality'},
-                        {'label': 'German Credit', 'value': 'german_credit'}
+                        {'label': 'Breast Cancer Wisconsin', 'value': 'breast_cancer'},
+                        {'label': 'Wine Quality (Red/White)', 'value': 'wine_quality'},
+                        {'label': 'German Credit (Pré-processado)', 'value': 'german_credit'}
                     ],
                     value='breast_cancer',
                     clearable=False,
-                    style={'width': '200px'}
+                    style={'width': '220px'}
                 )
             ], style={'display': 'flex', 'alignItems': 'center'})
         ]
@@ -105,9 +107,9 @@ app.layout = html.Div([
             dbc.Col([
                 html.Label("Método XAI:"),
                 dcc.Dropdown(id='dropdown-metodo', options=[], clearable=False)
-            ], width=4),
+            ], width=3),
             dbc.Col([
-                html.Label("Métrica Auxiliar (Estabilidade XAI):"),
+                html.Label("Métrica Auxiliar (Estabilidade):"),
                 dcc.Dropdown(
                     id='dropdown-metrica-estabilidade',
                     options=[
@@ -118,11 +120,23 @@ app.layout = html.Div([
                     value='spearman',
                     clearable=False
                 )
-            ], width=4),
+            ], width=3),
+            dbc.Col([
+                html.Label("Algoritmo de Projeção (2D):"),
+                dcc.Dropdown(
+                    id='dropdown-algo-proj',
+                    options=[
+                        {'label': 't-SNE', 'value': 'TSNE'},
+                        {'label': 'PCA (Recalculado)', 'value': 'PCA'}
+                    ],
+                    value='TSNE',
+                    clearable=False
+                )
+            ], width=3),
             dbc.Col([
                 html.Label("Filtro de Classe:"),
                 dcc.Dropdown(id='dropdown-classe', options=[], value='TODAS', clearable=False)
-            ], width=4),
+            ], width=3),
         ], className="my-3"),
 
         # Slider de Épocas
@@ -133,7 +147,7 @@ app.layout = html.Div([
             ], width=12)
         ], className="mb-4"),
 
-        # Linha 1: Performance + Estabilidade XAI integradas e Heatmap
+        # Linha 1: Performance + Estabilidade XAI integradas E Heatmap
         dbc.Row([
             dbc.Col([
                 dbc.Card([
@@ -150,21 +164,24 @@ app.layout = html.Div([
             ], width=12, lg=6),
         ]),
 
-        # Linha 2: Redução de Dimensionalidade Principal (t-SNE) e Visualização Auxiliar de Dimensionalidade
+        # Linha 2: Redução de Dimensionalidade Principal e Inspeção Auxiliar Local
         dbc.Row([
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Redução de Dimensionalidade Principal (t-SNE / Projeção Espacial)"),
+                    dbc.CardHeader("Redução de Dimensionalidade 2D (Clique em um ponto para inspecionar)"),
                     dbc.CardBody([dcc.Graph(id='tsne-graph')])
                 ], className="shadow-sm mb-4")
-            ], width=12, lg=6),
+            ], width=12, lg=7),
 
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Análise Auxiliar de Dimensionalidade (Dispersão / Variação Temporal)"),
-                    dbc.CardBody([dcc.Graph(id='dim-reduction-aux-graph')])
+                    dbc.CardHeader("Visualização Auxiliar: Perfil de Importância da Instância Selecionada"),
+                    dbc.CardBody([
+                        html.Div(id='info-instancia-selecionada', style={'marginBottom': '10px', 'fontSize': '13px'}),
+                        dcc.Graph(id='local-xai-bar-graph', style={'height': '350px'})
+                    ])
                 ], className="shadow-sm mb-4")
-            ], width=12, lg=6),
+            ], width=12, lg=5),
         ]),
 
         # Linha 3: Sankey
@@ -224,22 +241,25 @@ def update_options(dataset_sel):
     [Output('metrics-stability-combined-graph', 'figure'),
      Output('heatmap-graph', 'figure'),
      Output('tsne-graph', 'figure'),
-     Output('dim-reduction-aux-graph', 'figure'),
+     Output('info-instancia-selecionada', 'children'),
+     Output('local-xai-bar-graph', 'figure'),
      Output('sankey-graph', 'figure')],
     [Input('dropdown-dataset', 'value'),
      Input('dropdown-metodo', 'value'),
      Input('dropdown-metrica-estabilidade', 'value'),
+     Input('dropdown-algo-proj', 'value'),
      Input('dropdown-classe', 'value'),
-     Input('slider-epocas', 'value')]
+     Input('slider-epocas', 'value'),
+     Input('tsne-graph', 'clickData')]
 )
-def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_sel):
+def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, algo_proj_sel, classe_sel, epocas_sel, clickData):
     df_d2 = carregar_csv_seguro("metricas_epocas", dataset_sel)
     df_d4 = carregar_csv_seguro("resumo_explicacoes", dataset_sel)
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
     df_d5 = carregar_csv_seguro("metricas_estabilidade_concordancia", dataset_sel)
     df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
 
-    # 1. Gráfico Combinado: Acurácia, Loss e Estabilidade XAI
+    # 1. Performance do Modelo + Estabilidade XAI Integradas
     fig_combined = go.Figure()
     if df_d2.empty:
         fig_combined.add_annotation(text="Dados de métricas de treino não encontrados.", showarrow=False)
@@ -252,7 +272,6 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
         if loss_col and 'epoca' in df_d2.columns:
             fig_combined.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2[loss_col], mode='lines+markers', name='Loss Validação', yaxis='y2', line=dict(color='#d62728')))
             
-        # Adiciona a curva de Estabilidade XAI sobreposta
         if not df_d5.empty and 'tipo_metrica' in df_d5.columns:
             mask_metodo = df_d5['tipo_metrica'].astype(str).str.upper() == str(metodo_sel).upper()
             mask_metrica = df_d5['metrica'].astype(str).str.lower() == str(metrica_est_sel).lower() if 'metrica' in df_d5.columns else True
@@ -287,36 +306,77 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             fig_heat = go.Figure(data=go.Heatmap(z=piv.values, x=piv.columns, y=piv.index, colorscale='Viridis'))
             fig_heat.update_layout(title=f"Heatmap de Importância ({metodo_sel})", margin=dict(t=30, b=30, l=50, r=20))
 
-    # 3. Projeção t-SNE Principal
-    fig_tsne = go.Figure()
+    # 3. Projeção Espacial 2D (t-SNE / PCA Recalculado)
+    fig_proj = go.Figure()
+    instancia_clicada_id = None
+    if clickData and 'points' in clickData and len(clickData['points']) > 0:
+        instancia_clicada_id = clickData['points'][0].get('customdata', [None])[0]
+
     if df_d6.empty:
-        fig_tsne.add_annotation(text="Arquivo CSV de projecao_tsne não encontrado.", showarrow=False)
-    elif 'metodo_xai' not in df_d6.columns or 'tsne_dim_1' not in df_d6.columns:
-        fig_tsne.add_annotation(text=f"Colunas t-SNE ausentes.", showarrow=False)
+        fig_proj.add_annotation(text="Arquivo CSV de projeção não encontrado.", showarrow=False)
     else:
-        df_t_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
-        if epocas_sel and 'epoca' in df_t_sub.columns:
-            df_t_sub = df_t_sub[(df_t_sub['epoca'] >= epocas_sel[0]) & (df_t_sub['epoca'] <= epocas_sel[1])]
-        if not df_t_sub.empty:
-            color_col = 'classe_predita' if 'classe_predita' in df_t_sub.columns else ('cluster_id' if 'cluster_id' in df_t_sub.columns else df_t_sub.columns[-1])
-            fig_tsne = go.Figure(data=go.Scatter(x=df_t_sub['tsne_dim_1'], y=df_t_sub['tsne_dim_2'], mode='markers', marker=dict(color=df_t_sub[color_col], colorscale='Plasma', opacity=0.7)))
-            fig_tsne.update_layout(title=f"Projeção t-SNE Espacial ({metodo_sel})", margin=dict(t=30, b=30, l=30, r=20))
+        df_p_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
+        
+        if epocas_sel and 'epoca' in df_p_sub.columns:
+            df_p_sub = df_p_sub[(df_p_sub['epoca'] >= epocas_sel[0]) & (df_p_sub['epoca'] <= epocas_sel[1])]
 
-    # 4. Visualização Auxiliar de Redução de Dimensionalidade (Variação/Dispersão Temporal)
-    fig_dim_aux = go.Figure()
-    if df_d6.empty or 'tsne_dim_1' not in df_d6.columns:
-        fig_dim_aux.add_annotation(text="Dados de projeção de dimensionalidade não disponíveis.", showarrow=False)
-    else:
-        df_aux_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
-        if not df_aux_sub.empty and 'epoca' in df_aux_sub.columns:
-            # Gráfico BoxPlot/Dispersão auxiliar da variação da primeira dimensão por época
-            fig_dim_aux = go.Figure(data=go.Box(
-                x=df_aux_sub['epoca'], y=df_aux_sub['tsne_dim_1'],
-                name="Dimensão 1 (t-SNE)", marker_color='#9467bd'
-            ))
-            fig_dim_aux.update_layout(title=f"Dispersão da Componente Principal por Época ({metodo_sel})", margin=dict(t=30, b=30, l=40, r=20))
+        if not df_p_sub.empty:
+            x_col, y_col = 'tsne_dim_1', 'tsne_dim_2'
+            
+            # Recálculo de PCA se selecionado e dados do Dataset 3 estiverem disponíveis
+            if algo_proj_sel == 'PCA' and not df_d3.empty and 'feature' in df_d3.columns and 'valor_atribuicao' in df_d3.columns:
+                id_inst_col = next((c for c in ['instancia_id', 'instance_id', 'id'] if c in df_d3.columns), None)
+                if id_inst_col:
+                    piv_pca = df_d3.pivot_table(index=id_inst_col, columns='feature', values='valor_atribuicao').fillna(0)
+                    if len(piv_pca) > 2:
+                        pca = PCA(n_components=2)
+                        res_pca = pca.fit_transform(piv_pca.values)
+                        df_pca = pd.DataFrame(res_pca, index=piv_pca.index, columns=['pca_dim_1', 'pca_dim_2']).reset_index()
+                        df_p_sub = df_p_sub.merge(df_pca, left_on=next((c for c in ['instancia_id', 'instance_id', 'id'] if c in df_p_sub.columns), id_inst_col), right_on=id_inst_col, how='left')
+                        x_col, y_col = 'pca_dim_1', 'pca_dim_2'
 
-    # 5. Fluxos Temporais (Sankey com fallback de ID de instância)
+            color_col = 'classe_predita' if 'classe_predita' in df_p_sub.columns else ('cluster_id' if 'cluster_id' in df_p_sub.columns else df_p_sub.columns[-1])
+            id_custom_col = next((c for c in ['instancia_id', 'instance_id', 'id'] if c in df_p_sub.columns), color_col)
+            
+            fig_proj = px.scatter(
+                df_p_sub, x=x_col, y=y_col, color=color_col,
+                color_continuous_scale='Plasma', custom_data=[id_custom_col]
+            )
+            fig_proj.update_traces(marker=dict(size=8, opacity=0.8))
+            fig_proj.update_layout(title=f"Projeção Espacial 2D ({algo_proj_sel}) - {metodo_sel}", margin=dict(t=30, b=30, l=30, r=20))
+
+    # 4. Visualização Auxiliar Local: Top Features da Instância Clicada
+    fig_local_bar = go.Figure()
+    info_html = "Clique em um ponto do gráfico 2D para inspecionar os detalhes da instância."
+    
+    if instancia_clicada_id is not None and not df_d3.empty:
+        id_inst_d3 = next((c for c in ['instancia_id', 'instance_id', 'id'] if c in df_d3.columns), None)
+        if id_inst_d3:
+            df_local = df_d3[
+                (df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()) &
+                (df_d3[id_inst_d3] == instancia_clicada_id)
+            ]
+            if not df_local.empty and 'valor_atribuicao' in df_local.columns and 'feature' in df_local.columns:
+                df_local_top = df_local.sort_values('valor_atribuicao', key=abs, ascending=True).tail(10)
+                colors_bar = ['#d62728' if v < 0 else '#1f77b4' for v in df_local_top['valor_atribuicao']]
+                
+                fig_local_bar.add_trace(go.Bar(
+                    x=df_local_top['valor_atribuicao'], y=df_local_top['feature'],
+                    orientation='h', marker_color=colors_bar
+                ))
+                fig_local_bar.update_layout(
+                    title=f"Top 10 Features (Instância #{instancia_clicada_id})",
+                    xaxis_title="Atribuição de Importância", yaxis_title="Feature",
+                    margin=dict(l=20, r=20, t=30, b=20)
+                )
+                info_html = html.Div([
+                    html.Span(f"Instância Selecionada: #{instancia_clicada_id}", style={'fontWeight': 'bold', 'color': '#1f77b4'})
+                ])
+
+    if fig_local_bar.data == ():
+        fig_local_bar.add_annotation(text="Nenhuma instância selecionada.", showarrow=False)
+
+    # 5. Fluxos Temporais (Sankey Robusto)
     fig_sankey = go.Figure()
     if df_d3.empty:
         fig_sankey.add_annotation(text="Arquivo CSV explicacoes_instancias não encontrado.", showarrow=False)
@@ -325,18 +385,15 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
         if 'metodo_xai' in df_sankey_sub.columns:
             df_sankey_sub = df_sankey_sub[df_sankey_sub['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
 
-        # Mapeia ou gera dinamicamente a coluna de id de instância
         id_col = next((c for c in ['instance_id', 'instancia_id', 'instancia', 'id_instancia', 'id', 'sample_id'] if c in df_sankey_sub.columns), None)
         if not id_col:
-            # Gera ID automático por posição dentro de cada época
             df_sankey_sub['auto_instance_id'] = df_sankey_sub.groupby('epoca').cumcount() if 'epoca' in df_sankey_sub.columns else range(len(df_sankey_sub))
             id_col = 'auto_instance_id'
 
-        # Mapeia dinamicamente a coluna de classe/grupo
         target_col = next((c for c in ['classe_predita', 'cluster_id', 'predicao', 'y_pred', 'target_pred', 'pred', 'classe_real'] if c in df_sankey_sub.columns), None)
 
         if not target_col:
-            fig_sankey.add_annotation(text=f"Coluna de classe predita/cluster não localizada.", showarrow=False)
+            fig_sankey.add_annotation(text="Coluna de classe predita/cluster não localizada.", showarrow=False)
         else:
             if epocas_sel and 'epoca' in df_sankey_sub.columns:
                 df_sankey_sub = df_sankey_sub[(df_sankey_sub['epoca'] >= epocas_sel[0]) & (df_sankey_sub['epoca'] <= epocas_sel[1])]
@@ -388,7 +445,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
                 else:
                     fig_sankey.add_annotation(text="Sem transições registradas para o intervalo de épocas selecionado.", showarrow=False)
 
-    return fig_combined, fig_heat, fig_tsne, fig_dim_aux, fig_sankey
+    return fig_combined, fig_heat, fig_proj, info_html, fig_local_bar, fig_sankey
 
 if __name__ == '__main__':
     app.run(debug=False)
