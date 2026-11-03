@@ -1,6 +1,7 @@
 import os
 import zipfile
 import requests
+import shutil
 import dash
 from dash import dcc, html, Input, Output
 import plotly.graph_objects as go
@@ -9,12 +10,12 @@ import numpy as np
 import dash_bootstrap_components as dbc
 
 # ==========================================
-# 0. DOWNLOAD E EXTRAÇÃO AUTOMÁTICA DOS CSVs (GOOGLE DRIVE CORRIGIDO)
+# 0. DOWNLOAD E EXTRAÇÃO AUTOMÁTICA DOS CSVs (COM BUSCA RECURSIVA)
 # ==========================================
-# Adicionado &confirm=t para evitar a página de aviso de ficheiro grande do Google Drive
 URL_GOOGLE_DRIVE_ZIP = "https://drive.google.com/uc?export=download&confirm=t&id=16E8yydOSbV6RwlhVPW5in_lIQr7CcjZm"
 
 def baixar_e_descompactar_dados():
+    # Verifica se o arquivo essencial já está na raiz
     if not os.path.exists("resumo_explicacoes_breast_cancer.csv"):
         print("[Início] Baixando arquivos de dados do Google Drive...")
         try:
@@ -27,7 +28,17 @@ def baixar_e_descompactar_dados():
             
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(".")
-            print("[Sucesso] Dados baixados e descompactados com sucesso!")
+            
+            # Varre subpastas para encontrar e mover todos os CSVs para a raiz
+            for root, dirs, files in os.walk("."):
+                for file in files:
+                    if file.endswith(".csv"):
+                        src_path = os.path.join(root, file)
+                        dst_path = file
+                        if src_path != dst_path and not os.path.exists(dst_path):
+                            shutil.move(src_path, dst_path)
+                            
+            print("[Sucesso] Dados baixados e organizados na raiz com sucesso!")
         except Exception as e:
             print(f"[Erro] Falha ao baixar dados do Drive: {e}")
 
