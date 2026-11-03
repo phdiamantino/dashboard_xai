@@ -15,21 +15,17 @@ import dash_bootstrap_components as dbc
 DRIVE_FILE_ID = "16E8yydOSbV6RwlhVPW5in_lIQr7CcjZm"
 
 def preparar_dados():
-    # Verifica se já temos CSVs extraídos na máquina
     if not glob.glob("**/*.csv", recursive=True):
-        print("[Início] Baixando arquivo ZIP pesado do Google Drive via gdown...")
+        print("[Início] Baixando arquivo ZIP do Google Drive via gdown...")
         try:
             zip_path = "dados_xai.zip"
             url = f"https://drive.google.com/uc?id={DRIVE_FILE_ID}"
-            
-            # gdown lida com redirecionamentos e confirmações de vírus automaticamente
             gdown.download(url, zip_path, quiet=False)
             
             print("[Extraindo] Descompactando arquivos...")
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(".")
                 
-            # Move todos os CSVs encontrados em subpastas para o diretório raiz
             for root, dirs, files in os.walk("."):
                 for file in files:
                     if file.endswith(".csv"):
@@ -38,7 +34,7 @@ def preparar_dados():
                         if src_path != dst_path and not os.path.exists(dst_path):
                             shutil.move(src_path, dst_path)
                             
-            print("[Sucesso] Todos os dados foram baixados e posicionados na raiz com sucesso!")
+            print("[Sucesso] Dados baixados e organizados na raiz com sucesso!")
         except Exception as e:
             print(f"[Erro] Falha grave no download/extração: {e}")
 
@@ -55,7 +51,6 @@ def carregar_csv_seguro(nome_base, dataset_sel):
         if arquivos:
             try:
                 df = pd.read_csv(arquivos[0])
-                # Limpeza de caracteres invisíveis (BOM UTF-8) e padronização
                 df.columns = df.columns.astype(str).str.replace('\ufeff', '').str.replace('ï»¿', '').str.strip().str.lower()
                 
                 if 'dataset_name' in df.columns:
@@ -237,6 +232,7 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
     df_d4 = carregar_csv_seguro("resumo_explicacoes", dataset_sel)
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
     df_d5 = carregar_csv_seguro("metricas_estabilidade_concordancia", dataset_sel)
+    df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
 
     # 1. Gráfico de Métricas
     fig_metrics = go.Figure()
@@ -298,10 +294,63 @@ def update_graphs(dataset_sel, metodo_sel, metrica_est_sel, classe_sel, epocas_s
             fig_stab = go.Figure(data=go.Scatter(x=df_s_sub['epoca_destino'], y=df_s_sub['valor_metrica'], mode='lines+markers', name=metrica_est_sel))
             fig_stab.update_layout(title=f"Estabilidade ({metrica_est_sel}) - {metodo_sel}", margin=dict(t=30, b=30, l=40, r=20))
 
-    # 5. Sankey
+    # 5. Fluxos Temporais (Sankey Dinâmico)
     fig_sankey = go.Figure()
-    fig_sankey.add_annotation(text="Sankey pronto - Aguardando processamento temporal", showarrow=False, x=0.5, y=0.5, font=dict(size=14))
-    fig_sankey.update_layout(title="Transições Temporais (Sankey)", margin=dict(t=30, b=30, l=30, r=30))
+    if df_d3.empty or 'metodo_xai' not in df_d3.columns:
+        fig_sankey.add_annotation(text="Arquivo CSV de explicações de instâncias não disponível para o Sankey.", showarrow=False)
+    else:
+        df_sankey_sub = df_d3[df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
+        
+        if classe_sel != 'TODAS' and 'classe_real' in df_sankey_sub.columns:
+            df_sankey_sub = df_sankey_sub[df_sankey_sub['classe_real'] == int(classe_sel)]
+            
+        if epocas_sel and 'epoca' in df_sankey_sub.columns:
+            df_sankey_sub = df_sankey_sub[(df_sankey_sub['epoca'] >= epocas_sel[0]) & (df_sankey_sub['epoca'] <= epocas_sel[1])]
+            
+        epocas_disponiveis = sorted(df_sankey_sub['epoca'].unique()) if 'epoca' in df_sankey_sub.columns else []
+        
+        if len(epocas_disponiveis) < 2:
+            fig_sankey.add_annotation(text="Selecione um intervalo com pelo menos 2 épocas para gerar o fluxo Sankey.", showarrow=False)
+        else:
+            nodes = []
+            sources, targets, values = [], [], []
+            node_map = {}
+            
+            target_col = 'classe_predita' if 'classe_predita' in df_sankey_sub.columns else ('cluster_id' if 'cluster_id' in df_sankey_sub.columns else None)
+            map_cls = Mapeamento_classes_dataset(dataset_sel)
+            
+            if target_col and 'instance_id' in df_sankey_sub.columns:
+                for ep in epocas_disponiveis:
+                    grupos = df_sankey_sub[df_sankey_sub['epoca'] == ep][target_col].unique()
+                    for g in grupos:
+                        label_g = map_cls.get(int(g), f"Grupo {g}") if isinstance(g, (int, float, str)) and str(g).isdigit() else f"Grupo {g}"
+                        node_name = f"Época {ep}: {label_g}"
+                        node_map[(ep, g)] = len(nodes)
+                        nodes.append(node_name)
+                        
+                for i in range(len(epocas_disponiveis) - 1):
+                    ep1, ep2 = epocas_disponiveis[i], epocas_disponiveis[i+1]
+                    df_e1 = df_sankey_sub[df_sankey_sub['epoca'] == ep1][['instance_id', target_col]]
+                    df_e2 = df_sankey_sub[df_sankey_sub['epoca'] == ep2][['instance_id', target_col]]
+                    
+                    merged = pd.merge(df_e1, df_e2, on='instance_id', suffixes=('_src', '_tgt'))
+                    trans = merged.groupby([f'{target_col}_src', f'{target_col}_tgt']).size().reset_index(name='count')
+                    
+                    for _, row in trans.iterrows():
+                        src_key = (ep1, row[f'{target_col}_src'])
+                        tgt_key = (ep2, row[f'{target_col}_tgt'])
+                        if src_key in node_map and tgt_key in node_map:
+                            sources.append(node_map[src_key])
+                            targets.append(node_map[tgt_key])
+                            values.append(row['count'])
+                            
+                fig_sankey = go.Figure(data=[go.Sankey(
+                    node=dict(pad=15, thickness=20, line=dict(color="black", width=0.5), label=nodes, color="blue"),
+                    link=dict(source=sources, target=targets, value=values, color="rgba(160, 160, 160, 0.4)")
+                )])
+                fig_sankey.update_layout(title=f"Fluxos Temporais de Transição ({metodo_sel})", margin=dict(t=30, b=30, l=30, r=30))
+            else:
+                fig_sankey.add_annotation(text="Colunas de classe/instância ausentes para criar os fluxos.", showarrow=False)
 
     return fig_metrics, fig_heat, fig_tsne, fig_stab, fig_sankey
 
