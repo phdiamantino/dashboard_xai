@@ -446,7 +446,6 @@ app.layout = html.Div([
                         dbc.Card([
                             dbc.CardHeader("Tabela Auxiliar de Instâncias (Seleção por Brushing / Caixa no Gráfico 2D / Sankey)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
                             dbc.CardBody([
-                                # AJUSTE 2: PERMITE MULTI-SELEÇÃO OU NENHUMA SELEÇÃO (DESMARCAR DEIXA MARCAÇÃO SUMIR)
                                 dash_table.DataTable(
                                     id='dim-tabela-instancias',
                                     columns=[
@@ -520,23 +519,6 @@ def update_options(dataset_sel):
     return options_metodo, val_metodo, opt_epocas, val_epoca, min_ep, max_ep, marks_ep, [min_ep, max_ep]
 
 
-# CALLBACK PARA SELEÇÃO DE ÉPOCA NO BOXPLOT ATUALIZAR O DROPDOWN DA PROJEÇÃO 2D
-@app.callback(
-    Output('dim-dropdown-epoca', 'value', allow_duplicate=True),
-    [Input('dim-reduction-aux-graph', 'clickData')],
-    prevent_initial_call=True
-)
-def sync_epoca_from_boxplot(boxClickData):
-    if boxClickData and 'points' in boxClickData and len(boxClickData['points']) > 0:
-        pt = boxClickData['points'][0]
-        if 'x' in pt:
-            try:
-                return int(pt['x'])
-            except ValueError:
-                pass
-    return dash.no_update
-
-
 # CALLBACK PRINCIPAL: ATUALIZA SOMENTE OS GRÁFICOS
 @app.callback(
     [Output('metrics-stability-combined-graph', 'figure'),
@@ -555,11 +537,10 @@ def sync_epoca_from_boxplot(boxClickData):
      Input('dim-toggle-trajetoria', 'value'),
      Input('dim-scatter-graph', 'clickData'),
      Input('sankey-graph', 'clickData'),
-     Input('dim-reduction-aux-graph', 'clickData'),
      Input('dim-tabela-instancias', 'selected_rows')],
     [State('dim-tabela-instancias', 'data')]
 )
-def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, epocas_sel, epoca_proj_sel, algo_sel, cor_proj_sel, trajetoria_sel, clickDataScatter, clickDataSankey, clickDataBox, selected_rows_table, table_data):
+def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, epocas_sel, epoca_proj_sel, algo_sel, cor_proj_sel, trajetoria_sel, clickDataScatter, clickDataSankey, selected_rows_table, table_data):
     df_d2 = carregar_csv_seguro("metricas_epocas", dataset_sel)
     df_d4 = carregar_csv_seguro("resumo_explicacoes", dataset_sel)
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
@@ -623,7 +604,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
     instancias_selecionadas_tabela = []
     instancias_destaque_sankey = []
 
-    # AJUSTE 2: LÊ TODAS AS LINHAS MARCADAS NA TABELA (SUPORTA UMA, VÁRIAS OU NENHUMA)
+    # LÊ LINHAS MARCADAS NA TABELA
     if selected_rows_table and table_data:
         for r_idx in selected_rows_table:
             if r_idx < len(table_data):
@@ -641,12 +622,6 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             if flow_idx < len(df_filtered_s):
                 lista_raw = df_filtered_s.iloc[flow_idx]['lista_instancias']
                 instancias_destaque_sankey = [str(x) for x in lista_raw]
-
-    # SELEÇÃO DE OUTLIER NO BOXPLOT
-    if not instancias_selecionadas_tabela and clickDataBox and 'points' in clickDataBox and len(clickDataBox['points']) > 0:
-        pt_b = clickDataBox['points'][0]
-        if 'customdata' in pt_b and len(pt_b['customdata']) > 0:
-            instancias_selecionadas_tabela.append(str(pt_b['customdata'][0]))
 
     # CLIQUE NO PRÓPRIO GRÁFICO 2D
     if not instancias_selecionadas_tabela and clickDataScatter and 'points' in clickDataScatter and len(clickDataScatter['points']) > 0:
@@ -738,7 +713,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     marker=dict(size=12, color='#f59e0b', symbol='diamond'), name=f'Trajetória ID #{inst_id_traj}'
                 ))
 
-            # AJUSTE 2: SE HOUVER INSTÂNCIAS MARCADAS NA TABELA, DESTACA COM CÍRCULO AMARELO. SE DESMARCADAS (VAZIO), NÃO ADICIONA NADA.
+            # DESTAQUE DAS INSTÂNCIAS MARCADAS NA TABELA COM CÍRCULO AMARELO
             if instancias_selecionadas_tabela:
                 pontos_clicados = df_sub[df_sub['instancia_id'].isin(instancias_selecionadas_tabela)]
                 if not pontos_clicados.empty:
@@ -770,7 +745,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 name="Dim 1 (t-SNE)", marker_color='#6366f1', boxpoints='outliers'
             ))
             fig_dim_aux.update_layout(
-                title="Dispersão Temporal (t-SNE Dim 1 - Clique para Selecionar Época)",
+                title="Dispersão Temporal (t-SNE Dim 1)",
                 margin=dict(l=20, r=20, t=30, b=20),
                 template="plotly_white"
             )
@@ -865,14 +840,13 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
     [Input('dim-scatter-graph', 'selectedData'),
      Input('dim-scatter-graph', 'clickData'),
      Input('sankey-graph', 'clickData'),
-     Input('dim-reduction-aux-graph', 'clickData'),
      Input('dropdown-dataset', 'value'),
      Input('dropdown-metodo', 'value'),
      Input('dim-dropdown-epoca', 'value'),
      Input('dim-dropdown-algo', 'value'),
      Input('slider-epocas', 'value')]
 )
-def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey, clickDataBox, dataset_sel, metodo_sel, epoca_proj_sel, algo_sel, epocas_sel):
+def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey, dataset_sel, metodo_sel, epoca_proj_sel, algo_sel, epocas_sel):
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
     df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
     if df_d6.empty:
@@ -920,9 +894,8 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
                 if pt_s['pointNumber'] < len(df_fil):
                     selected_ids = [str(x) for x in df_fil.iloc[pt_s['pointNumber']]['lista_instancias']]
 
-    # AJUSTE 1: BRUSHING / CAIXA OU DUPLO CLIQUE (RESET) NO GRÁFICO 2D
+    # BRUSHING / CAIXA OU DUPLO CLIQUE (RESET) NO GRÁFICO 2D
     if not selected_ids:
-        # Se o usuário der duplo clique no gráfico 2D, selectedData vem como None ou dict com 'points': []
         if selectedData is not None and isinstance(selectedData, dict):
             pts = selectedData.get('points', [])
             if len(pts) > 0:
@@ -931,14 +904,7 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
                         selected_ids.append(str(pt['customdata'][0]))
                 selected_ids = list(dict.fromkeys(selected_ids))
             else:
-                # Duplo clique desfez o laço -> reset completo para exibir a tabela original
                 selected_ids = []
-
-    # SELEÇÃO DE OUTLIER NO BOXPLOT
-    if not selected_ids and clickDataBox and isinstance(clickDataBox, dict) and 'points' in clickDataBox and len(clickDataBox['points']) > 0:
-        pt_b = clickDataBox['points'][0]
-        if 'customdata' in pt_b and isinstance(pt_b['customdata'], list) and len(pt_b['customdata']) > 0:
-            selected_ids = [str(pt_b['customdata'][0])]
 
     # CLIQUE EM PONTO DO GRÁFICO 2D
     elif not selected_ids and clickDataScatter and isinstance(clickDataScatter, dict) and 'points' in clickDataScatter and len(clickDataScatter['points']) > 0:
