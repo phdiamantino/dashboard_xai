@@ -139,7 +139,7 @@ def carregar_dados_sankey(dataset_sel):
 
 def processar_dados_sankey(df_d3, df_d2, dataset_sel):
     if df_d3.empty or df_d2.empty:
-        return pd.DataFrame(), []
+        return pd.DataFrame(), [], pd.DataFrame()
 
     if 'importancia_absoluta' not in df_d3.columns:
         if 'valor_atribuicao' in df_d3.columns:
@@ -231,7 +231,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
 
     df_trans = pd.DataFrame(transicoes)
     if df_trans.empty:
-        return pd.DataFrame(), epocas
+        return pd.DataFrame(), epocas, pd.DataFrame()
 
     df_sankey = df_trans.groupby(
         ['metodo_xai', 'epoca_origem', 'epoca_destino', 'classe_origem', 'classe_destino']
@@ -242,10 +242,11 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
         taxa_erro=('taxa_erro', 'mean'),
         importancia_media=('importancia_media', 'mean'),
         exemplo_instancia=('instancia_id', 'first'),
-        classe_real_dominante=('classe_real', lambda x: int(x.mode()[0]))
+        classe_real_dominante=('classe_real', lambda x: int(x.mode()[0])),
+        lista_instancias=('instancia_id', lambda x: list(x))
     ).reset_index()
 
-    return df_sankey, epocas
+    return df_sankey, epocas, df_trans
 
 
 # ==========================================
@@ -318,11 +319,6 @@ app.layout = html.Div([
                             clearable=False,
                             style={'fontSize': '11px', 'marginBottom': '12px'}
                         )
-                    ]),
-
-                    html.Div([
-                        html.Label("Filtro Classe:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
-                        dcc.Dropdown(id='dropdown-classe', options=[], value='TODAS', clearable=False, style={'fontSize': '11px', 'marginBottom': '12px'})
                     ]),
 
                     html.Hr(style={'borderColor': '#cbd5e1', 'margin': '10px 0'}),
@@ -448,7 +444,7 @@ app.layout = html.Div([
                 dbc.Row([
                     dbc.Col([
                         dbc.Card([
-                            dbc.CardHeader("Tabela Auxiliar de Instâncias (Seleção por Brushing / Caixa no Gráfico 2D)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                            dbc.CardHeader("Tabela Auxiliar de Instâncias (Seleção por Brushing / Caixa no Gráfico 2D / Sankey)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
                             dbc.CardBody([
                                 dash_table.DataTable(
                                     id='dim-tabela-instancias',
@@ -464,6 +460,8 @@ app.layout = html.Div([
                                     ],
                                     data=[],
                                     page_size=6,
+                                    row_selectable='single',
+                                    selected_rows=[],
                                     style_table={'overflowX': 'auto'},
                                     style_cell={'textAlign': 'left', 'fontFamily': 'sans-serif', 'fontSize': '12px'},
                                     style_header={'backgroundColor': '#f1f5f9', 'fontWeight': 'bold', 'color': '#1e293b'}
@@ -521,7 +519,24 @@ def update_options(dataset_sel):
     return options_metodo, val_metodo, opt_epocas, val_epoca, min_ep, max_ep, marks_ep, [min_ep, max_ep]
 
 
-# CALLBACK PRINCIPAL: ATUALIZA SOMENTE OS GRÁFICOS (SEM INTERFERIR NA TABELA)
+# CALLBACK SINKRONIZADOR DE ÉPOCA VIA BOXPLOT (REQUISITO 3)
+@app.callback(
+    Output('dim-dropdown-epoca', 'value', allow_duplicate=True),
+    [Input('dim-reduction-aux-graph', 'clickData')],
+    prevent_initial_call=True
+)
+def sync_epoca_from_boxplot(boxClickData):
+    if boxClickData and 'points' in boxClickData and len(boxClickData['points']) > 0:
+        pt = boxClickData['points'][0]
+        if 'x' in pt:
+            try:
+                return int(pt['x'])
+            except ValueError:
+                pass
+    return dash.no_update
+
+
+# CALLBACK PRINCIPAL: GERADORES DOS GRÁFICOS
 @app.callback(
     [Output('metrics-stability-combined-graph', 'figure'),
      Output('heatmap-graph', 'figure'),
@@ -532,15 +547,18 @@ def update_options(dataset_sel):
      Input('dropdown-metodo', 'value'),
      Input('dropdown-metrica-estabilidade', 'value'),
      Input('dropdown-cor-metrica', 'value'),
-     Input('dropdown-classe', 'value'),
      Input('slider-epocas', 'value'),
      Input('dim-dropdown-epoca', 'value'),
      Input('dim-dropdown-algo', 'value'),
      Input('dim-dropdown-cor', 'value'),
      Input('dim-toggle-trajetoria', 'value'),
-     Input('dim-scatter-graph', 'clickData')]
+     Input('dim-scatter-graph', 'clickData'),
+     Input('sankey-graph', 'clickData'),
+     Input('dim-reduction-aux-graph', 'clickData'),
+     Input('dim-tabela-instancias', 'selected_rows')],
+    [State('dim-tabela-instancias', 'data')]
 )
-def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, classe_sel, epocas_sel, epoca_proj_sel, algo_sel, cor_proj_sel, trajetoria_sel, clickData):
+def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, epocas_sel, epoca_proj_sel, algo_sel, cor_proj_sel, trajetoria_sel, clickDataScatter, clickDataSankey, clickDataBox, selected_rows_table, table_data):
     df_d2 = carregar_csv_seguro("metricas_epocas", dataset_sel)
     df_d4 = carregar_csv_seguro("resumo_explicacoes", dataset_sel)
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
@@ -597,10 +615,47 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 template="plotly_white"
             )
 
+    # PROCESSAMENTO DE DADOS DO SANKEY
+    df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
+    df_sankey_processed, _, df_trans_raw = processar_dados_sankey(df_d3_sankey, df_d2_sankey, dataset_sel)
+
+    # DESTAQUES REATIVOS NO GRÁFICO 2D
+    instancia_clicada_id = None
+    instancias_destaque_sankey = []
+
+    # Requisito 5: Clique na tabela destaca no gráfico 2D
+    if selected_rows_table and table_data and len(selected_rows_table) > 0:
+        row_idx = selected_rows_table[0]
+        if row_idx < len(table_data):
+            instancia_clicada_id = str(table_data[row_idx]['instancia_id'])
+
+    # Requisito 2: Clique no fluxo do Sankey destaca instâncias no 2D
+    if not instancia_clicada_id and clickDataSankey and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
+        pt_s = clickDataSankey['points'][0]
+        if 'pointNumber' in pt_s and not df_sankey_processed.empty:
+            flow_idx = pt_s['pointNumber']
+            m_alvo = metodo_sel if metodo_sel in df_sankey_processed['metodo_xai'].unique() else df_sankey_processed['metodo_xai'].iloc[0]
+            df_filtered_s = df_sankey_processed[df_sankey_processed['metodo_xai'] == m_alvo].copy()
+            if epocas_sel:
+                df_filtered_s = df_filtered_s[(df_filtered_s['epoca_origem'] >= epocas_sel[0]) & (df_filtered_s['epoca_destino'] <= epocas_sel[1])]
+            if flow_idx < len(df_filtered_s):
+                lista_raw = df_filtered_s.iloc[flow_idx]['lista_instancias']
+                instancias_destaque_sankey = [str(x) for x in lista_raw]
+
+    # Requisito 4: Seleção de Outliers no Boxplot
+    if not instancia_clicada_id and clickDataBox and 'points' in clickDataBox and len(clickDataBox['points']) > 0:
+        pt_b = clickDataBox['points'][0]
+        if 'customdata' in pt_b and len(pt_b['customdata']) > 0:
+            instancia_clicada_id = str(pt_b['customdata'][0])
+
+    # Clique no próprio gráfico 2D
+    if not instancia_clicada_id and clickDataScatter and 'points' in clickDataScatter and len(clickDataScatter['points']) > 0:
+        p_click = clickDataScatter['points'][0]
+        if 'customdata' in p_click and len(p_click['customdata']) > 0:
+            instancia_clicada_id = str(p_click['customdata'][0])
+
     # 3. Redução de Dimensionalidade (t-SNE / PCA)
     fig_tsne = go.Figure()
-    instancia_clicada_id = None
-
     if not df_d6.empty:
         epoca_alvo = epoca_proj_sel if epoca_proj_sel else (df_d6['epoca'].min() if 'epoca' in df_d6.columns else 1)
         df_sub = df_d6[
@@ -624,11 +679,6 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     x_col, y_col = 'tsne_dim_1', 'tsne_dim_2'
             else:
                 x_col, y_col = 'tsne_dim_1', 'tsne_dim_2'
-
-            if clickData and 'points' in clickData and len(clickData['points']) > 0:
-                p_click = clickData['points'][0]
-                if 'customdata' in p_click and len(p_click['customdata']) > 0:
-                    instancia_clicada_id = str(p_click['customdata'][0])
 
             if cor_proj_sel == 'erro_predicao':
                 df_sub['cor_label'] = df_sub['erro_predicao'].map({0: 'Acerto', 1: 'Erro'})
@@ -664,6 +714,17 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     )
                 )
 
+            # Destaque de instâncias provenientes do Sankey (Requisito 2)
+            if instancias_destaque_sankey:
+                df_sankey_pts = df_sub[df_sub['instancia_id'].isin(instancias_destaque_sankey)]
+                if not df_sankey_pts.empty:
+                    fig_tsne.add_trace(go.Scatter(
+                        x=df_sankey_pts[x_col], y=df_sankey_pts[y_col], mode='markers',
+                        marker=dict(size=14, color='rgba(0,0,0,0)', line=dict(color='#ec4899', width=2.5)),
+                        name='Instâncias do Fluxo Sankey', hoverinfo='skip'
+                    ))
+
+            # Trajetória temporal
             if 'ATIVO' in trajetoria_sel and instancia_clicada_id is not None:
                 df_traj = df_d6[
                     (df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()) &
@@ -676,6 +737,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     marker=dict(size=12, color='#f59e0b', symbol='diamond'), name=f'Trajetória ID #{instancia_clicada_id}'
                 ))
 
+            # Destaque visual de ponto único (Requisito 4 e 5)
             if instancia_clicada_id is not None:
                 ponto_clicado = df_sub[df_sub['instancia_id'] == instancia_clicada_id]
                 if not ponto_clicado.empty:
@@ -695,26 +757,25 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 selectdirection='any'
             )
 
-    # 4. Boxplot Auxiliar Temporal
+    # 4. Boxplot Auxiliar Temporal (Com suporte a customdata para outliers - Requisito 4)
     fig_dim_aux = go.Figure()
     if not df_d6.empty and 'tsne_dim_1' in df_d6.columns:
-        df_aux_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
+        df_aux_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
         if not df_aux_sub.empty and 'epoca' in df_aux_sub.columns:
+            df_aux_sub['instancia_id'] = df_aux_sub['instancia_id'].astype(str)
             fig_dim_aux = go.Figure(data=go.Box(
                 x=df_aux_sub['epoca'], y=df_aux_sub['tsne_dim_1'],
-                name="Dim 1 (t-SNE)", marker_color='#6366f1'
+                customdata=df_aux_sub[['instancia_id']],
+                name="Dim 1 (t-SNE)", marker_color='#6366f1', boxpoints='outliers'
             ))
             fig_dim_aux.update_layout(
-                title="Dispersão Temporal (t-SNE Dim 1)",
+                title="Dispersão Temporal (t-SNE Dim 1 - Clique para selecionar Época / Outlier)",
                 margin=dict(l=20, r=20, t=30, b=20),
                 template="plotly_white"
             )
 
     # 5. Fluxos Temporais (Sankey)
     fig_sankey = go.Figure()
-    df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
-    df_sankey_processed, _ = processar_dados_sankey(df_d3_sankey, df_d2_sankey, dataset_sel)
-
     if not df_sankey_processed.empty:
         metodos_validos = df_sankey_processed['metodo_xai'].unique()
         m_alvo = metodo_sel if metodo_sel in metodos_validos else metodos_validos[0]
@@ -725,8 +786,6 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 (df_filtered['epoca_origem'] >= epocas_sel[0]) &
                 (df_filtered['epoca_destino'] <= epocas_sel[1])
             ]
-        if classe_sel is not None and classe_sel != 'TODAS':
-            df_filtered = df_filtered[df_filtered['classe_origem'] == int(classe_sel)]
 
         if not df_filtered.empty:
             map_cls = Mapeamento_classes_dataset(dataset_sel)
@@ -799,17 +858,20 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
     return fig_combined, fig_heat, fig_tsne, fig_dim_aux, fig_sankey
 
 
-# CALLBACK 2 INDEPENDENTE: EXCLUSIVO PARA REATIVIDADE DA TABELA VIA BRUSHING/CLIQUE
+# CALLBACK 2 INDEPENDENTE: ATUALIZAÇÃO REATIVA DA TABELA AUXILIAR
 @app.callback(
     Output('dim-tabela-instancias', 'data'),
     [Input('dim-scatter-graph', 'selectedData'),
      Input('dim-scatter-graph', 'clickData'),
+     Input('sankey-graph', 'clickData'),
+     Input('dim-reduction-aux-graph', 'clickData'),
      Input('dropdown-dataset', 'value'),
      Input('dropdown-metodo', 'value'),
      Input('dim-dropdown-epoca', 'value'),
-     Input('dim-dropdown-algo', 'value')]
+     Input('dim-dropdown-algo', 'value'),
+     Input('slider-epocas', 'value')]
 )
-def update_table_from_selection(selectedData, clickData, dataset_sel, metodo_sel, epoca_proj_sel, algo_sel):
+def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey, clickDataBox, dataset_sel, metodo_sel, epoca_proj_sel, algo_sel, epocas_sel):
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
     df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
     if df_d6.empty:
@@ -843,20 +905,40 @@ def update_table_from_selection(selectedData, clickData, dataset_sel, metodo_sel
 
     selected_ids = []
 
-    # Prioridade 1: Seleção múltipla por caixa ou laço (Brushing)
-    if selectedData and isinstance(selectedData, dict) and 'points' in selectedData and len(selectedData['points']) > 0:
+    # Requisito 2: Filtragem de tabela via clique em Fluxo do Sankey (Prioridade Máxima)
+    if clickDataSankey and isinstance(clickDataSankey, dict) and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
+        pt_s = clickDataSankey['points'][0]
+        if 'pointNumber' in pt_s:
+            df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
+            df_sankey_proc, _, _ = processar_dados_sankey(df_d3_sankey, df_d2_sankey, dataset_sel)
+            if not df_sankey_proc.empty:
+                m_alvo = metodo_sel if metodo_sel in df_sankey_proc['metodo_xai'].unique() else df_sankey_proc['metodo_xai'].iloc[0]
+                df_fil = df_sankey_proc[df_sankey_proc['metodo_xai'] == m_alvo]
+                if epocas_sel:
+                    df_fil = df_fil[(df_fil['epoca_origem'] >= epocas_sel[0]) & (df_fil['epoca_destino'] <= epocas_sel[1])]
+                if pt_s['pointNumber'] < len(df_fil):
+                    selected_ids = [str(x) for x in df_fil.iloc[pt_s['pointNumber']]['lista_instancias']]
+
+    # Prioridade 2: Seleção de caixa/laço (Brushing 2D)
+    if not selected_ids and selectedData and isinstance(selectedData, dict) and 'points' in selectedData and len(selectedData['points']) > 0:
         for pt in selectedData['points']:
             if 'customdata' in pt and isinstance(pt['customdata'], list) and len(pt['customdata']) > 0:
                 selected_ids.append(str(pt['customdata'][0]))
         selected_ids = list(dict.fromkeys(selected_ids))
 
-    # Prioridade 2: Clique individual
-    elif clickData and isinstance(clickData, dict) and 'points' in clickData and len(clickData['points']) > 0:
-        p_click = clickData['points'][0]
+    # Prioridade 3: Outlier do Boxplot (Requisito 4)
+    elif not selected_ids and clickDataBox and isinstance(clickDataBox, dict) and 'points' in clickDataBox and len(clickDataBox['points']) > 0:
+        pt_b = clickDataBox['points'][0]
+        if 'customdata' in pt_b and isinstance(pt_b['customdata'], list) and len(pt_b['customdata']) > 0:
+            selected_ids = [str(pt_b['customdata'][0])]
+
+    # Prioridade 4: Clique em ponto do gráfico 2D
+    elif not selected_ids and clickDataScatter and isinstance(clickDataScatter, dict) and 'points' in clickDataScatter and len(clickDataScatter['points']) > 0:
+        p_click = clickDataScatter['points'][0]
         if 'customdata' in p_click and isinstance(p_click['customdata'], list) and len(p_click['customdata']) > 0:
             selected_ids = [str(p_click['customdata'][0])]
 
-    # Exibe somente as instâncias selecionadas
+    # Filtragem estrita
     if len(selected_ids) > 0:
         df_tabela = df_sub[df_sub['instancia_id'].isin(selected_ids)]
     else:
