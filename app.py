@@ -425,8 +425,9 @@ app.layout = html.Div([
                                     id='dim-scatter-graph',
                                     style={'height': '460px'},
                                     config={
-                                        'modeBarButtonsToAdd': ['drawrect', 'eraseshape', 'lasso2d', 'select2d'],
-                                        'displaylogo': False
+                                        'modeBarButtonsToAdd': ['select2d', 'lasso2d'],
+                                        'displayModeBar': True,
+                                        'scrollZoom': True
                                     }
                                 )
                             ])
@@ -520,7 +521,7 @@ def update_options(dataset_sel):
     return options_metodo, val_metodo, opt_epocas, val_epoca, min_ep, max_ep, marks_ep, [min_ep, max_ep]
 
 
-# CALLBACK 1: ATUALIZA SOMENTE OS GRÁFICOS PRINCIPAIS
+# CALLBACK PRINCIPAL: ATUALIZA SOMENTE OS GRÁFICOS (SEM INTERFERIR NA TABELA)
 @app.callback(
     [Output('metrics-stability-combined-graph', 'figure'),
      Output('heatmap-graph', 'figure'),
@@ -608,9 +609,11 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         ].copy()
 
         if not df_sub.empty:
+            df_sub['instancia_id'] = df_sub['instancia_id'].astype(str)
             if algo_sel == 'PCA' and not df_d3.empty:
-                df_exp_ep = df_d3[(df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()) & (df_d3['epoca'] == int(epoca_alvo))]
+                df_exp_ep = df_d3[(df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()) & (df_d3['epoca'] == int(epoca_alvo))].copy()
                 if not df_exp_ep.empty:
+                    df_exp_ep['instancia_id'] = df_exp_ep['instancia_id'].astype(str)
                     pivot_pca = df_exp_ep.pivot_table(index='instancia_id', columns='feature', values='valor_atribuicao').fillna(0)
                     pca = PCA(n_components=2)
                     res_pca = pca.fit_transform(pivot_pca.values)
@@ -625,7 +628,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             if clickData and 'points' in clickData and len(clickData['points']) > 0:
                 p_click = clickData['points'][0]
                 if 'customdata' in p_click and len(p_click['customdata']) > 0:
-                    instancia_clicada_id = p_click['customdata'][0]
+                    instancia_clicada_id = str(p_click['customdata'][0])
 
             if cor_proj_sel == 'erro_predicao':
                 df_sub['cor_label'] = df_sub['erro_predicao'].map({0: 'Acerto', 1: 'Erro'})
@@ -664,7 +667,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             if 'ATIVO' in trajetoria_sel and instancia_clicada_id is not None:
                 df_traj = df_d6[
                     (df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()) &
-                    (df_d6['instancia_id'] == instancia_clicada_id)
+                    (df_d6['instancia_id'].astype(str) == instancia_clicada_id)
                 ].sort_values('epoca')
                 fig_tsne.add_trace(go.Scatter(
                     x=df_traj['tsne_dim_1'], y=df_traj['tsne_dim_2'],
@@ -686,7 +689,10 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 title=f"Espaço 2D ({algo_sel}) - Época {epoca_alvo} ({metodo_sel}) - {label_ds}",
                 xaxis_title=f"{algo_sel} Dim 1", yaxis_title=f"{algo_sel} Dim 2",
                 margin=dict(l=20, r=20, t=40, b=20),
-                template="plotly_white"
+                template="plotly_white",
+                dragmode='select',
+                clickmode='event+select',
+                selectdirection='any'
             )
 
     # 4. Boxplot Auxiliar Temporal
@@ -793,45 +799,64 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
     return fig_combined, fig_heat, fig_tsne, fig_dim_aux, fig_sankey
 
 
-# CALLBACK 2: DEDICADO EXCLUSIVAMENTE PARA ATUALIZAR A TABELA VIA SELEÇÃO / BRUSHING DO GRÁFICO 2D
+# CALLBACK 2 INDEPENDENTE: EXCLUSIVO PARA REATIVIDADE DA TABELA VIA BRUSHING/CLIQUE
 @app.callback(
     Output('dim-tabela-instancias', 'data'),
     [Input('dim-scatter-graph', 'selectedData'),
      Input('dim-scatter-graph', 'clickData'),
      Input('dropdown-dataset', 'value'),
      Input('dropdown-metodo', 'value'),
-     Input('dim-dropdown-epoca', 'value')]
+     Input('dim-dropdown-epoca', 'value'),
+     Input('dim-dropdown-algo', 'value')]
 )
-def update_table_from_selection(selectedData, clickData, dataset_sel, metodo_sel, epoca_proj_sel):
+def update_table_from_selection(selectedData, clickData, dataset_sel, metodo_sel, epoca_proj_sel, algo_sel):
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
+    df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
     if df_d6.empty:
         return []
 
     epoca_alvo = epoca_proj_sel if epoca_proj_sel else (df_d6['epoca'].min() if 'epoca' in df_d6.columns else 1)
     df_sub = df_d6[
         (df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()) &
-        (df_d6['epoca'] == int(epoca_alvo))
+        (pd.to_numeric(df_d6['epoca'], errors='coerce') == int(epoca_alvo))
     ].copy()
 
     if df_sub.empty:
         return []
 
+    df_sub['instancia_id'] = df_sub['instancia_id'].astype(str)
+
+    if algo_sel == 'PCA' and not df_d3.empty:
+        df_exp = df_d3[
+            (df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()) &
+            (pd.to_numeric(df_d3['epoca'], errors='coerce') == int(epoca_alvo))
+        ].copy()
+        if not df_exp.empty:
+            df_exp['instancia_id'] = df_exp['instancia_id'].astype(str)
+            pivot = df_exp.pivot_table(index='instancia_id', columns='feature', values='valor_atribuicao', fill_value=0)
+            if len(pivot) >= 2 and pivot.shape[1] >= 2:
+                pca = PCA(n_components=2)
+                resultado = pca.fit_transform(pivot.values)
+                pca_df = pd.DataFrame(resultado, columns=['dim_1', 'dim_2'])
+                pca_df['instancia_id'] = pivot.index.astype(str)
+                df_sub = df_sub.merge(pca_df, on='instancia_id', how='inner')
+
     selected_ids = []
 
-    # 1. Tenta extrair a seleção via caixa/laço (Box / Lasso select)
+    # Prioridade 1: Seleção múltipla por caixa ou laço (Brushing)
     if selectedData and isinstance(selectedData, dict) and 'points' in selectedData and len(selectedData['points']) > 0:
         for pt in selectedData['points']:
             if 'customdata' in pt and isinstance(pt['customdata'], list) and len(pt['customdata']) > 0:
-                selected_ids.append(pt['customdata'][0])
+                selected_ids.append(str(pt['customdata'][0]))
         selected_ids = list(dict.fromkeys(selected_ids))
 
-    # 2. Se não houver seleção por caixa, checa o clique individual
+    # Prioridade 2: Clique individual
     elif clickData and isinstance(clickData, dict) and 'points' in clickData and len(clickData['points']) > 0:
         p_click = clickData['points'][0]
         if 'customdata' in p_click and isinstance(p_click['customdata'], list) and len(p_click['customdata']) > 0:
-            selected_ids = [p_click['customdata'][0]]
+            selected_ids = [str(p_click['customdata'][0])]
 
-    # Se houver itens selecionados, filtra a tabela para exibir SOMENTE ELES
+    # Exibe somente as instâncias selecionadas
     if len(selected_ids) > 0:
         df_tabela = df_sub[df_sub['instancia_id'].isin(selected_ids)]
     else:
