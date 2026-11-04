@@ -43,13 +43,13 @@ def preparar_dados():
 
 preparar_dados()
 
-# Escala de cor sequencial para o Heatmap (Vermelho suave a profundo)
+# Escala de cor sequencial para o Heatmap (Vermelho suave a profundo, iniciando em ~20%)
 COLORSCALE_REDS_20 = [
-    [0.0, "rgb(254, 224, 210)"],
+    [0.0, "rgb(254, 224, 210)"],  # Vermelho bem claro (20%)
     [0.25, "rgb(252, 146, 114)"],
     [0.5, "rgb(251, 106, 74)"],
     [0.75, "rgb(222, 45, 38)"],
-    [1.0, "rgb(165, 15, 21)"]
+    [1.0, "rgb(165, 15, 21)"]     # Vermelho escuro profundo
 ]
 
 # Escala de cor sequencial para o gráfico 2D (Azul elegante)
@@ -426,7 +426,7 @@ app.layout = html.Div([
                                 dcc.Graph(
                                     id='dim-scatter-graph',
                                     style={'height': '460px'},
-                                    config={'modeBarButtonsToAdd': ['drawrect', 'eraseshape', 'lasso2d', 'select2d']}
+                                    config={'modeBarButtonsToAdd': ['drawrect', 'eraseshape']}
                                 )
                             ])
                         ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
@@ -578,7 +578,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         template="plotly_white"
     )
 
-    # 2. Heatmap de Importância (Paleta de Vermelhos em tons profissionais)
+    # 2. Heatmap de Importância (Utilizando a nova escala COLORSCALE_REDS_20)
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
@@ -654,7 +654,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 )
             )
 
-            # Barra de cores exclusiva para 0 e 1
+            # Ajuste estrito na barra de cores para mostrar SOMENTE 0 e 1
             if cor_proj_sel != 'erro_predicao':
                 fig_tsne.update_layout(
                     coloraxis_colorbar=dict(
@@ -692,23 +692,23 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 template="plotly_white"
             )
 
-            # ESTRUTURA DE FILTRAGEM E EXTRAÇÃO ROBUSTA DAS INSTÂNCIAS SELECIONADAS (BRUSHING E CLIQUE)
+            # ESTRUTURA DE EXTRAÇÃO E REATIVIDADE PARA SELEÇÃO MULTIPLA / BRUSHING
             selected_ids = []
 
-            # Prioridade 1: Leitura direta do evento de seleção por caixa/laço (selectedData)
-            if selectedData and isinstance(selectedData, dict) and 'points' in selectedData and len(selectedData['points']) > 0:
+            # 1ª Prioridade: Brushing (Seleção de caixa/laço de 1 ou mais instâncias no gráfico 2D)
+            if selectedData and 'points' in selectedData and len(selectedData['points']) > 0:
                 for pt in selectedData['points']:
-                    if 'customdata' in pt and isinstance(pt['customdata'], list) and len(pt['customdata']) > 0:
+                    if 'customdata' in pt and len(pt['customdata']) > 0:
                         selected_ids.append(pt['customdata'][0])
-                # Remove duplicatas preservando a ordem
+                # Garantia de remoção de duplicatas mantendo a ordem
                 selected_ids = list(dict.fromkeys(selected_ids))
-
-            # Prioridade 2: Clique em um ponto individual se não houver seleção de caixa
+                
+            # 2ª Prioridade: Clique pontual em uma única instância
             elif instancia_clicada_id is not None:
                 selected_ids = [instancia_clicada_id]
 
-            # Filtra estritamente as instâncias se houver alguma seleção ativa
-            if len(selected_ids) > 0:
+            # Filtra a Tabela Auxiliar de Instâncias de forma estrita para exibir APENAS as selecionadas
+            if selected_ids:
                 df_tabela = df_sub[df_sub['instancia_id'].isin(selected_ids)]
             else:
                 df_tabela = df_sub
