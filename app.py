@@ -43,6 +43,15 @@ def preparar_dados():
 
 preparar_dados()
 
+# Escala de cor sequencial customizada (iniciando em 20% da paleta azul para evitar tons brancos)
+COLORSCALE_BLUES_20 = [
+    [0.0, "rgb(222, 235, 247)"], # Azul bem claro (20%)
+    [0.25, "rgb(158, 202, 225)"],
+    [0.5, "rgb(66, 146, 198)"],
+    [0.75, "rgb(33, 113, 181)"],
+    [1.0, "rgb(8, 48, 107)"]     # Azul escuro profundo
+]
+
 # ==========================================
 # 1. MAPEAMENTO E CARREGAMENTO DE DADOS
 # ==========================================
@@ -233,7 +242,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
 
 
 # ==========================================
-# 2. INICIALIZAÇÃO DA APLICAÇÃO DASH (LAYOUT COM SIDEBAR)
+# 2. INICIALIZAÇÃO DA APLICAÇÃO DASH (SIDEBAR COMPACTA 2 COLS)
 # ==========================================
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 server = app.server
@@ -249,136 +258,135 @@ app.layout = html.Div([
 
     dbc.Container([
         dbc.Row([
-            # SIDEBAR DE FILTROS E SELEÇÕES
+            # SIDEBAR DE FILTROS E SELEÇÕES (COMPACTA - LARGURA 2/12)
             dbc.Col([
                 html.Div([
-                    html.H5("Painel de Controle", style={'fontWeight': 'bold', 'color': '#1e293b', 'marginBottom': '20px', 'fontSize': '16px'}),
+                    html.H5("Controles", style={'fontWeight': 'bold', 'color': '#1e293b', 'marginBottom': '15px', 'fontSize': '15px'}),
                     
                     html.Div([
-                        html.Label("Dataset / Banco de Dados:", style={'fontSize': '12px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        html.Label("Dataset:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
                         dcc.Dropdown(
                             id='dropdown-dataset',
                             options=[
-                                {'label': 'Breast Cancer Wisconsin', 'value': 'breast_cancer'},
-                                {'label': 'Wine Quality (Red/White)', 'value': 'wine_quality'},
-                                {'label': 'German Credit (Cost Risk)', 'value': 'german_credit'}
+                                {'label': 'Breast Cancer', 'value': 'breast_cancer'},
+                                {'label': 'Wine Quality', 'value': 'wine_quality'},
+                                {'label': 'German Credit', 'value': 'german_credit'}
                             ],
                             value='breast_cancer',
                             clearable=False,
-                            style={'fontSize': '12px', 'marginBottom': '15px'}
+                            style={'fontSize': '11px', 'marginBottom': '12px'}
                         ),
                     ]),
 
                     html.Div([
-                        html.Label("Método XAI:", style={'fontSize': '12px', 'fontWeight': 'bold', 'color': '#334155'}),
-                        dcc.Dropdown(id='dropdown-metodo', options=[], clearable=False, style={'fontSize': '12px', 'marginBottom': '15px'})
+                        html.Label("Método XAI:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        dcc.Dropdown(id='dropdown-metodo', options=[], clearable=False, style={'fontSize': '11px', 'marginBottom': '12px'})
                     ]),
 
                     html.Div([
-                        html.Label("Métrica de Estabilidade:", style={'fontSize': '12px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        html.Label("Métrica Estabilidade:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
                         dcc.Dropdown(
                             id='dropdown-metrica-estabilidade',
                             options=[
-                                {'label': 'Correlação de Spearman (Ranking)', 'value': 'spearman'},
-                                {'label': 'MAD (Desvio Absoluto Médio)', 'value': 'mad_importancia'},
-                                {'label': 'Variância de Importância', 'value': 'variancia_importancia'}
+                                {'label': 'Spearman', 'value': 'spearman'},
+                                {'label': 'MAD Absoluto', 'value': 'mad_importancia'},
+                                {'label': 'Variância', 'value': 'variancia_importancia'}
                             ],
                             value='spearman',
                             clearable=False,
-                            style={'fontSize': '12px', 'marginBottom': '15px'}
+                            style={'fontSize': '11px', 'marginBottom': '12px'}
                         )
                     ]),
 
                     html.Div([
-                        html.Label("Mapeamento de Cores (Sankey):", style={'fontSize': '12px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        html.Label("Cores (Sankey):", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
                         dcc.Dropdown(
                             id='dropdown-cor-metrica',
                             options=[
-                                {'label': 'Classe Predita Dominante', 'value': 'classe'},
-                                {'label': 'Taxa de Confiança', 'value': 'confianca'},
+                                {'label': 'Classe Predita', 'value': 'classe'},
+                                {'label': 'Confiança', 'value': 'confianca'},
                                 {'label': 'Taxa de Erro', 'value': 'erro'}
                             ],
                             value='classe',
                             clearable=False,
-                            style={'fontSize': '12px', 'marginBottom': '15px'}
+                            style={'fontSize': '11px', 'marginBottom': '12px'}
                         )
                     ]),
 
                     html.Div([
-                        html.Label("Filtro de Classe:", style={'fontSize': '12px', 'fontWeight': 'bold', 'color': '#334155'}),
-                        dcc.Dropdown(id='dropdown-classe', options=[], value='TODAS', clearable=False, style={'fontSize': '12px', 'marginBottom': '15px'})
+                        html.Label("Filtro Classe:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        dcc.Dropdown(id='dropdown-classe', options=[], value='TODAS', clearable=False, style={'fontSize': '11px', 'marginBottom': '12px'})
                     ]),
 
-                    html.Hr(style={'borderColor': '#cbd5e1'}),
+                    html.Hr(style={'borderColor': '#cbd5e1', 'margin': '10px 0'}),
 
-                    # DIV ENVOLVENDO O RANGESLIDER PARA CORRIGIR O ERRO DO PARAMETRO STYLE
                     html.Div([
-                        html.Label("Intervalo de Épocas (Brushing):", style={'fontSize': '12px', 'fontWeight': 'bold', 'color': '#334155'}),
-                        dcc.RangeSlider(id='slider-epocas', min=1, max=40, step=None, marks={1: "Ép 1"}, value=[1, 40])
-                    ], style={'paddingBottom': '15px'}),
+                        html.Label("Épocas (Sankey):", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        dcc.RangeSlider(id='slider-epocas', min=1, max=40, step=None, marks={1: "1", 40: "40"}, value=[1, 40])
+                    ], style={'paddingBottom': '10px'}),
 
-                    html.Hr(style={'borderColor': '#cbd5e1'}),
+                    html.Hr(style={'borderColor': '#cbd5e1', 'margin': '10px 0'}),
 
-                    html.H6("Controles 2D (t-SNE/PCA)", style={'fontWeight': 'bold', 'color': '#1e293b', 'marginTop': '15px', 'marginBottom': '10px', 'fontSize': '14px'}),
+                    html.H6("Controles 2D", style={'fontWeight': 'bold', 'color': '#1e293b', 'marginTop': '10px', 'marginBottom': '8px', 'fontSize': '13px'}),
                     
                     html.Div([
-                        html.Label("Época Específica:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
-                        dcc.Dropdown(id='dim-dropdown-epoca', options=[], clearable=False, style={'fontSize': '12px', 'marginBottom': '10px'})
+                        html.Label("Época 2D:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        dcc.Dropdown(id='dim-dropdown-epoca', options=[], clearable=False, style={'fontSize': '11px', 'marginBottom': '10px'})
                     ]),
 
                     html.Div([
-                        html.Label("Algoritmo de Projeção:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        html.Label("Algoritmo:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
                         dcc.Dropdown(
                             id='dim-dropdown-algo',
                             options=[{'label': 't-SNE', 'value': 'TSNE'}, {'label': 'PCA', 'value': 'PCA'}],
                             value='TSNE',
                             clearable=False,
-                            style={'fontSize': '12px', 'marginBottom': '10px'}
+                            style={'fontSize': '11px', 'marginBottom': '10px'}
                         )
                     ]),
 
                     html.Div([
-                        html.Label("Colorir Pontos 2D Por:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        html.Label("Colorir 2D Por:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
                         dcc.Dropdown(
                             id='dim-dropdown-cor',
                             options=[
                                 {'label': 'Classe Predita', 'value': 'classe_predita'},
                                 {'label': 'Classe Real', 'value': 'classe_real'},
-                                {'label': 'Erro de Predição', 'value': 'erro_predicao'}
+                                {'label': 'Erro Predição', 'value': 'erro_predicao'}
                             ],
                             value='classe_predita',
                             clearable=False,
-                            style={'fontSize': '12px', 'marginBottom': '10px'}
+                            style={'fontSize': '11px', 'marginBottom': '10px'}
                         )
                     ]),
 
                     html.Div([
                         dcc.Checklist(
                             id='dim-toggle-trajetoria',
-                            options=[{'label': ' Traçar Migração Temporal', 'value': 'ATIVO'}],
+                            options=[{'label': ' Trajetória', 'value': 'ATIVO'}],
                             value=[],
                             style={'fontSize': '11px', 'color': '#334155'}
                         )
-                    ], style={'marginTop': '10px'})
+                    ], style={'marginTop': '5px'})
 
                 ], style={
                     'backgroundColor': '#ffffff',
-                    'padding': '20px',
-                    'borderRadius': '10px',
-                    'boxShadow': '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+                    'padding': '15px',
+                    'borderRadius': '8px',
+                    'boxShadow': '0 4px 6px -1px rgba(0, 0, 0, 0.05)',
                     'border': '1px solid #e2e8f0',
                     'marginBottom': '20px'
                 })
-            ], width=3),
+            ], width=2),
 
-            # CONTEÚDO PRINCIPAL COM AS VISUALIZAÇÕES
+            # CONTEÚDO PRINCIPAL (EXPANDIDO - LARGURA 10/12)
             dbc.Col([
                 # 1. Sankey como Primeira Visualização
                 dbc.Row([
                     dbc.Col([
                         dbc.Card([
                             dbc.CardHeader("Fluxos Temporais de Transição de Classe (Sankey Reativo ao XAI)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
-                            dbc.CardBody([dcc.Graph(id='sankey-graph', style={'height': '550px'})])
+                            dbc.CardBody([dcc.Graph(id='sankey-graph', style={'height': '530px'})])
                         ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
                     ], width=12)
                 ]),
@@ -454,9 +462,9 @@ app.layout = html.Div([
                     ], width=12)
                 ])
 
-            ], width=9)
+            ], width=10)
         ])
-    ], fluid=True, style={'backgroundColor': '#f4f7f9', 'padding': '25px', 'minHeight': '100vh'})
+    ], fluid=True, style={'backgroundColor': '#f4f7f9', 'padding': '20px', 'minHeight': '100vh'})
 ])
 
 
@@ -497,7 +505,7 @@ def update_options(dataset_sel):
 
     min_ep = min(epocas) if epocas else 1
     max_ep = max(epocas) if epocas else 40
-    marks_ep = {int(ep): f"Ép {ep}" for ep in epocas} if epocas else {1: "Ép 1"}
+    marks_ep = {int(ep): f"{ep}" for ep in epocas} if epocas else {1: "1"}
     
     return options_metodo, val_metodo, opt_epocas, val_epoca, min_ep, max_ep, marks_ep, [min_ep, max_ep]
 
@@ -561,7 +569,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         template="plotly_white"
     )
 
-    # 2. Heatmap de Importância (Escala de Cores Sequencial 'Blues')
+    # 2. Heatmap de Importância (Começando a partir de 20% do tom suave de azul)
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
@@ -570,7 +578,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             piv = df_h_sub.pivot_table(index='feature', columns='epoca', values=val_col, fill_value=0)
             fig_heat = go.Figure(data=go.Heatmap(
                 z=piv.values, x=piv.columns, y=piv.index, 
-                colorscale='Blues', # Escala sequencial suave
+                colorscale=COLORSCALE_BLUES_20,
                 hovertemplate='Feature: %{y}<br>Época: %{x}<br>Importância Média: %{z:.4f}<extra></extra>'
             ))
             fig_heat.update_layout(
@@ -619,7 +627,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             else:
                 fig_tsne = px.scatter(
                     df_sub, x=x_col, y=y_col, color=cor_proj_sel, 
-                    color_continuous_scale='Blues', # Escala sequencial elegante
+                    color_continuous_scale=COLORSCALE_BLUES_20,
                     custom_data=['instancia_id', 'classe_real', 'classe_predita', 'erro_predicao']
                 )
 
