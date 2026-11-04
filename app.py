@@ -43,13 +43,13 @@ def preparar_dados():
 
 preparar_dados()
 
-# Escala de cor sequencial customizada (iniciando em 20% da paleta azul para evitar tons brancos)
+# Escala de cor sequencial customizada (iniciando em 20% da paleta azul)
 COLORSCALE_BLUES_20 = [
-    [0.0, "rgb(222, 235, 247)"], # Azul bem claro (20%)
+    [0.0, "rgb(222, 235, 247)"],
     [0.25, "rgb(158, 202, 225)"],
     [0.5, "rgb(66, 146, 198)"],
     [0.75, "rgb(33, 113, 181)"],
-    [1.0, "rgb(8, 48, 107)"]     # Azul escuro profundo
+    [1.0, "rgb(8, 48, 107)"]
 ]
 
 # ==========================================
@@ -242,7 +242,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
 
 
 # ==========================================
-# 2. INICIALIZAÇÃO DA APLICAÇÃO DASH (SIDEBAR COMPACTA 2 COLS)
+# 2. INICIALIZAÇÃO DA APLICAÇÃO DASH
 # ==========================================
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 server = app.server
@@ -258,7 +258,7 @@ app.layout = html.Div([
 
     dbc.Container([
         dbc.Row([
-            # SIDEBAR DE FILTROS E SELEÇÕES (COMPACTA - LARGURA 2/12)
+            # SIDEBAR DE FILTROS E SELEÇÕES
             dbc.Col([
                 html.Div([
                     html.H5("Controles", style={'fontWeight': 'bold', 'color': '#1e293b', 'marginBottom': '15px', 'fontSize': '15px'}),
@@ -379,9 +379,9 @@ app.layout = html.Div([
                 })
             ], width=2),
 
-            # CONTEÚDO PRINCIPAL (EXPANDIDO - LARGURA 10/12)
+            # CONTEÚDO PRINCIPAL
             dbc.Col([
-                # 1. Sankey como Primeira Visualização
+                # 1. Sankey
                 dbc.Row([
                     dbc.Col([
                         dbc.Card([
@@ -569,7 +569,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         template="plotly_white"
     )
 
-    # 2. Heatmap de Importância (Começando a partir de 20% do tom suave de azul)
+    # 2. Heatmap de Importância
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
@@ -614,8 +614,11 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             else:
                 x_col, y_col = 'tsne_dim_1', 'tsne_dim_2'
 
+            # Captura de clique individual
             if clickData and 'points' in clickData and len(clickData['points']) > 0:
-                instancia_clicada_id = clickData['points'][0]['customdata'][0]
+                p_click = clickData['points'][0]
+                if 'customdata' in p_click and len(p_click['customdata']) > 0:
+                    instancia_clicada_id = p_click['customdata'][0]
 
             if cor_proj_sel == 'erro_predicao':
                 df_sub['cor_label'] = df_sub['erro_predicao'].map({0: 'Acerto', 1: 'Erro'})
@@ -641,6 +644,16 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     "<b>X:</b> %{x:.3f} | <b>Y:</b> %{y:.3f}<extra></extra>"
                 )
             )
+
+            # Ajuste estrito na barra de cores para mostrar SOMENTE os rótulos 0 e 1
+            if cor_proj_sel != 'erro_predicao':
+                fig_tsne.update_layout(
+                    coloraxis_colorbar=dict(
+                        tickvals=[0, 1],
+                        ticktext=['0', '1'],
+                        title=cor_proj_sel
+                    )
+                )
 
             if 'ATIVO' in trajetoria_sel and instancia_clicada_id is not None:
                 df_traj = df_d6[
@@ -670,12 +683,22 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 template="plotly_white"
             )
 
-            # Tabela Auxiliar (Brushing / Seleção por caixa ou Cliques)
-            if selectedData and 'points' in selectedData:
-                selected_ids = [p['customdata'][0] for p in selectedData['points'] if 'customdata' in p]
-                df_tabela = df_sub[df_sub['instancia_id'].isin(selected_ids)]
+            # LÓGICA DE FILTRAGEM REATIVA DA TABELA AUXILIAR (BRUSHING / CAIXA / SELEÇÃO MULTIPLA E CLIQUE)
+            selected_ids = []
+
+            # 1ª Prioridade: Seleção por Caixa / Laço (Brushing de 1 ou mais instâncias)
+            if selectedData and 'points' in selectedData and len(selectedData['points']) > 0:
+                for pt in selectedData['points']:
+                    if 'customdata' in pt and len(pt['customdata']) > 0:
+                        selected_ids.append(pt['customdata'][0])
+                
+            # 2ª Prioridade: Clique em Ponto Único
             elif instancia_clicada_id is not None:
-                df_tabela = df_sub[df_sub['instancia_id'] == instancia_clicada_id]
+                selected_ids = [instancia_clicada_id]
+
+            # Aplicação do filtro na tabela
+            if selected_ids:
+                df_tabela = df_sub[df_sub['instancia_id'].isin(selected_ids)]
             else:
                 df_tabela = df_sub
 
@@ -696,7 +719,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 template="plotly_white"
             )
 
-    # 5. Fluxos Temporais (Sankey na Primeira Posição)
+    # 5. Fluxos Temporais (Sankey)
     fig_sankey = go.Figure()
     df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
     df_sankey_processed, _ = processar_dados_sankey(df_d3_sankey, df_d2_sankey, dataset_sel)
