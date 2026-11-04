@@ -311,10 +311,11 @@ app.layout = html.Div([
 
                     html.Hr(style={'borderColor': '#cbd5e1'}),
 
+                    # DIV ENVOLVENDO O RANGESLIDER PARA CORRIGIR O ERRO DO PARAMETRO STYLE
                     html.Div([
                         html.Label("Intervalo de Épocas (Brushing):", style={'fontSize': '12px', 'fontWeight': 'bold', 'color': '#334155'}),
-                        dcc.RangeSlider(id='slider-epocas', min=1, max=40, step=None, marks={1: "Ép 1"}, value=[1, 40], style={'paddingBottom': '15px'})
-                    ]),
+                        dcc.RangeSlider(id='slider-epocas', min=1, max=40, step=None, marks={1: "Ép 1"}, value=[1, 40])
+                    ], style={'paddingBottom': '15px'}),
 
                     html.Hr(style={'borderColor': '#cbd5e1'}),
 
@@ -556,10 +557,11 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         yaxis=dict(title="Acurácia / Estabilidade"),
         yaxis2=dict(title="Loss", overlaying='y', side='right', showgrid=False),
         margin=dict(t=30, b=30, l=40, r=40),
-        legend=dict(x=0.01, y=0.99, orientation='h')
+        legend=dict(x=0.01, y=0.99, orientation='h'),
+        template="plotly_white"
     )
 
-    # 2. Heatmap
+    # 2. Heatmap de Importância (Escala de Cores Sequencial 'Blues')
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
@@ -567,10 +569,15 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             val_col = 'importancia_media' if 'importancia_media' in df_h_sub.columns else df_h_sub.columns[-1]
             piv = df_h_sub.pivot_table(index='feature', columns='epoca', values=val_col, fill_value=0)
             fig_heat = go.Figure(data=go.Heatmap(
-                z=piv.values, x=piv.columns, y=piv.index, colorscale='Viridis',
+                z=piv.values, x=piv.columns, y=piv.index, 
+                colorscale='Blues', # Escala sequencial suave
                 hovertemplate='Feature: %{y}<br>Época: %{x}<br>Importância Média: %{z:.4f}<extra></extra>'
             ))
-            fig_heat.update_layout(title=f"Heatmap de Importância ({metodo_sel})", margin=dict(t=30, b=30, l=50, r=20))
+            fig_heat.update_layout(
+                title=f"Heatmap de Importância ({metodo_sel})",
+                margin=dict(t=30, b=30, l=50, r=20),
+                template="plotly_white"
+            )
 
     # 3. Redução de Dimensionalidade (t-SNE / PCA)
     fig_tsne = go.Figure()
@@ -606,17 +613,18 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 df_sub['cor_label'] = df_sub['erro_predicao'].map({0: 'Acerto', 1: 'Erro'})
                 fig_tsne = px.scatter(
                     df_sub, x=x_col, y=y_col, color='cor_label',
-                    color_discrete_map={'Acerto': '#2ca02c', 'Erro': '#d62728'},
+                    color_discrete_map={'Acerto': '#059669', 'Erro': '#dc2626'},
                     custom_data=['instancia_id', 'classe_real', 'classe_predita', 'erro_predicao']
                 )
             else:
                 fig_tsne = px.scatter(
-                    df_sub, x=x_col, y=y_col, color=cor_proj_sel, color_continuous_scale='Viridis',
+                    df_sub, x=x_col, y=y_col, color=cor_proj_sel, 
+                    color_continuous_scale='Blues', # Escala sequencial elegante
                     custom_data=['instancia_id', 'classe_real', 'classe_predita', 'erro_predicao']
                 )
 
             fig_tsne.update_traces(
-                marker=dict(size=9, opacity=0.8, line=dict(width=0.5, color='black')),
+                marker=dict(size=8, opacity=0.85, line=dict(width=0.5, color='#334155')),
                 hovertemplate=(
                     "<b>Instância ID:</b> #%{customdata[0]}<br>"
                     "<b>Classe Real:</b> %{customdata[1]}<br>"
@@ -634,8 +642,8 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 fig_tsne.add_trace(go.Scatter(
                     x=df_traj['tsne_dim_1'], y=df_traj['tsne_dim_2'],
                     mode='lines+markers+text', text=[f"E{ep}" for ep in df_traj['epoca']],
-                    textposition="top center", line=dict(color='orange', width=3, dash='dash'),
-                    marker=dict(size=12, color='orange', symbol='diamond'), name=f'Trajetória ID #{instancia_clicada_id}'
+                    textposition="top center", line=dict(color='#f59e0b', width=3, dash='dash'),
+                    marker=dict(size=12, color='#f59e0b', symbol='diamond'), name=f'Trajetória ID #{instancia_clicada_id}'
                 ))
 
             if instancia_clicada_id is not None:
@@ -643,14 +651,15 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 if not ponto_clicado.empty:
                     fig_tsne.add_trace(go.Scatter(
                         x=ponto_clicado[x_col], y=ponto_clicado[y_col], mode='markers',
-                        marker=dict(size=18, color='rgba(0,0,0,0)', line=dict(color='yellow', width=3)),
+                        marker=dict(size=18, color='rgba(0,0,0,0)', line=dict(color='#eab308', width=3)),
                         showlegend=False, hoverinfo='skip'
                     ))
 
             fig_tsne.update_layout(
                 title=f"Espaço 2D ({algo_sel}) - Época {epoca_alvo} ({metodo_sel}) - {label_ds}",
                 xaxis_title=f"{algo_sel} Dim 1", yaxis_title=f"{algo_sel} Dim 2",
-                margin=dict(l=20, r=20, t=40, b=20)
+                margin=dict(l=20, r=20, t=40, b=20),
+                template="plotly_white"
             )
 
             # Tabela Auxiliar (Brushing / Seleção por caixa ou Cliques)
@@ -671,9 +680,13 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         if not df_aux_sub.empty and 'epoca' in df_aux_sub.columns:
             fig_dim_aux = go.Figure(data=go.Box(
                 x=df_aux_sub['epoca'], y=df_aux_sub['tsne_dim_1'],
-                name="Dim 1 (t-SNE)", marker_color='#9467bd'
+                name="Dim 1 (t-SNE)", marker_color='#6366f1'
             ))
-            fig_dim_aux.update_layout(title="Dispersão Temporal (t-SNE Dim 1)", margin=dict(l=20, r=20, t=30, b=20))
+            fig_dim_aux.update_layout(
+                title="Dispersão Temporal (t-SNE Dim 1)",
+                margin=dict(l=20, r=20, t=30, b=20),
+                template="plotly_white"
+            )
 
     # 5. Fluxos Temporais (Sankey na Primeira Posição)
     fig_sankey = go.Figure()
@@ -727,7 +740,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     alpha = max(0.30, min(0.85, conf))
 
                     if cor_sankey_sel == 'classe':
-                        base_rgb = "31, 119, 180" if row['classe_origem'] == 0 else "255, 127, 14"
+                        base_rgb = "37, 99, 235" if row['classe_origem'] == 0 else "249, 115, 22"
                     elif cor_sankey_sel == 'confianca':
                         base_rgb = f"{int(255*(1-conf))}, {int(200*conf)}, 150"
                     else:
@@ -752,12 +765,13 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
 
             fig_sankey = go.Figure(data=[go.Sankey(
                 arrangement="snap",
-                node=dict(pad=30, thickness=20, line=dict(color="black", width=0.5), label=node_labels, x=node_x, y=node_y, color="lightgray"),
+                node=dict(pad=30, thickness=20, line=dict(color="#334155", width=0.5), label=node_labels, x=node_x, y=node_y, color="#e2e8f0"),
                 link=dict(source=sources, target=targets, value=values, color=link_colors, customdata=hover_texts, hovertemplate="%{customdata}<extra></extra>")
             )])
             fig_sankey.update_layout(
                 title_text=f"Transições Temporais de Explicações ({m_alvo}) - Dataset: {dataset_sel.upper()}",
-                font_size=12, margin=dict(l=20, r=20, t=50, b=20)
+                font_size=12, margin=dict(l=20, r=20, t=50, b=20),
+                template="plotly_white"
             )
 
     return fig_combined, fig_heat, fig_tsne, fig_dim_aux, tabela_records, fig_sankey
