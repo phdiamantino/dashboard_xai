@@ -4,7 +4,7 @@ import glob
 import shutil
 import gdown
 import dash
-from dash import dcc, html, Input, Output, dash_table
+from dash import dcc, html, Input, Output, State, dash_table
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
@@ -43,16 +43,14 @@ def preparar_dados():
 
 preparar_dados()
 
-# Escala de cor sequencial para o Heatmap (Vermelho suave a profundo, iniciando em ~20%)
 COLORSCALE_REDS_20 = [
-    [0.0, "rgb(254, 224, 210)"],  # Vermelho bem claro (20%)
+    [0.0, "rgb(254, 224, 210)"],
     [0.25, "rgb(252, 146, 114)"],
     [0.5, "rgb(251, 106, 74)"],
     [0.75, "rgb(222, 45, 38)"],
-    [1.0, "rgb(165, 15, 21)"]     # Vermelho escuro profundo
+    [1.0, "rgb(165, 15, 21)"]
 ]
 
-# Escala de cor sequencial para o gráfico 2D (Azul elegante)
 COLORSCALE_BLUES_20 = [
     [0.0, "rgb(222, 235, 247)"],
     [0.25, "rgb(158, 202, 225)"],
@@ -426,7 +424,10 @@ app.layout = html.Div([
                                 dcc.Graph(
                                     id='dim-scatter-graph',
                                     style={'height': '460px'},
-                                    config={'modeBarButtonsToAdd': ['drawrect', 'eraseshape']}
+                                    config={
+                                        'modeBarButtonsToAdd': ['drawrect', 'eraseshape', 'lasso2d', 'select2d'],
+                                        'displaylogo': False
+                                    }
                                 )
                             ])
                         ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
@@ -519,12 +520,12 @@ def update_options(dataset_sel):
     return options_metodo, val_metodo, opt_epocas, val_epoca, min_ep, max_ep, marks_ep, [min_ep, max_ep]
 
 
+# CALLBACK 1: ATUALIZA SOMENTE OS GRÁFICOS PRINCIPAIS
 @app.callback(
     [Output('metrics-stability-combined-graph', 'figure'),
      Output('heatmap-graph', 'figure'),
      Output('dim-scatter-graph', 'figure'),
      Output('dim-reduction-aux-graph', 'figure'),
-     Output('dim-tabela-instancias', 'data'),
      Output('sankey-graph', 'figure')],
     [Input('dropdown-dataset', 'value'),
      Input('dropdown-metodo', 'value'),
@@ -536,10 +537,9 @@ def update_options(dataset_sel):
      Input('dim-dropdown-algo', 'value'),
      Input('dim-dropdown-cor', 'value'),
      Input('dim-toggle-trajetoria', 'value'),
-     Input('dim-scatter-graph', 'clickData'),
-     Input('dim-scatter-graph', 'selectedData')]
+     Input('dim-scatter-graph', 'clickData')]
 )
-def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, classe_sel, epocas_sel, epoca_proj_sel, algo_sel, cor_proj_sel, trajetoria_sel, clickData, selectedData):
+def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, classe_sel, epocas_sel, epoca_proj_sel, algo_sel, cor_proj_sel, trajetoria_sel, clickData):
     df_d2 = carregar_csv_seguro("metricas_epocas", dataset_sel)
     df_d4 = carregar_csv_seguro("resumo_explicacoes", dataset_sel)
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
@@ -578,7 +578,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         template="plotly_white"
     )
 
-    # 2. Heatmap de Importância (Utilizando a nova escala COLORSCALE_REDS_20)
+    # 2. Heatmap de Importância
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
@@ -598,7 +598,6 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
 
     # 3. Redução de Dimensionalidade (t-SNE / PCA)
     fig_tsne = go.Figure()
-    tabela_records = []
     instancia_clicada_id = None
 
     if not df_d6.empty:
@@ -623,7 +622,6 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             else:
                 x_col, y_col = 'tsne_dim_1', 'tsne_dim_2'
 
-            # Captura de clique individual
             if clickData and 'points' in clickData and len(clickData['points']) > 0:
                 p_click = clickData['points'][0]
                 if 'customdata' in p_click and len(p_click['customdata']) > 0:
@@ -654,7 +652,6 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 )
             )
 
-            # Ajuste estrito na barra de cores para mostrar SOMENTE 0 e 1
             if cor_proj_sel != 'erro_predicao':
                 fig_tsne.update_layout(
                     coloraxis_colorbar=dict(
@@ -691,29 +688,6 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 margin=dict(l=20, r=20, t=40, b=20),
                 template="plotly_white"
             )
-
-            # ESTRUTURA DE EXTRAÇÃO E REATIVIDADE PARA SELEÇÃO MULTIPLA / BRUSHING
-            selected_ids = []
-
-            # 1ª Prioridade: Brushing (Seleção de caixa/laço de 1 ou mais instâncias no gráfico 2D)
-            if selectedData and 'points' in selectedData and len(selectedData['points']) > 0:
-                for pt in selectedData['points']:
-                    if 'customdata' in pt and len(pt['customdata']) > 0:
-                        selected_ids.append(pt['customdata'][0])
-                # Garantia de remoção de duplicatas mantendo a ordem
-                selected_ids = list(dict.fromkeys(selected_ids))
-                
-            # 2ª Prioridade: Clique pontual em uma única instância
-            elif instancia_clicada_id is not None:
-                selected_ids = [instancia_clicada_id]
-
-            # Filtra a Tabela Auxiliar de Instâncias de forma estrita para exibir APENAS as selecionadas
-            if selected_ids:
-                df_tabela = df_sub[df_sub['instancia_id'].isin(selected_ids)]
-            else:
-                df_tabela = df_sub
-
-            tabela_records = df_tabela.to_dict('records')
 
     # 4. Boxplot Auxiliar Temporal
     fig_dim_aux = go.Figure()
@@ -816,7 +790,54 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 template="plotly_white"
             )
 
-    return fig_combined, fig_heat, fig_tsne, fig_dim_aux, tabela_records, fig_sankey
+    return fig_combined, fig_heat, fig_tsne, fig_dim_aux, fig_sankey
+
+
+# CALLBACK 2: DEDICADO EXCLUSIVAMENTE PARA ATUALIZAR A TABELA VIA SELEÇÃO / BRUSHING DO GRÁFICO 2D
+@app.callback(
+    Output('dim-tabela-instancias', 'data'),
+    [Input('dim-scatter-graph', 'selectedData'),
+     Input('dim-scatter-graph', 'clickData'),
+     Input('dropdown-dataset', 'value'),
+     Input('dropdown-metodo', 'value'),
+     Input('dim-dropdown-epoca', 'value')]
+)
+def update_table_from_selection(selectedData, clickData, dataset_sel, metodo_sel, epoca_proj_sel):
+    df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
+    if df_d6.empty:
+        return []
+
+    epoca_alvo = epoca_proj_sel if epoca_proj_sel else (df_d6['epoca'].min() if 'epoca' in df_d6.columns else 1)
+    df_sub = df_d6[
+        (df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()) &
+        (df_d6['epoca'] == int(epoca_alvo))
+    ].copy()
+
+    if df_sub.empty:
+        return []
+
+    selected_ids = []
+
+    # 1. Tenta extrair a seleção via caixa/laço (Box / Lasso select)
+    if selectedData and isinstance(selectedData, dict) and 'points' in selectedData and len(selectedData['points']) > 0:
+        for pt in selectedData['points']:
+            if 'customdata' in pt and isinstance(pt['customdata'], list) and len(pt['customdata']) > 0:
+                selected_ids.append(pt['customdata'][0])
+        selected_ids = list(dict.fromkeys(selected_ids))
+
+    # 2. Se não houver seleção por caixa, checa o clique individual
+    elif clickData and isinstance(clickData, dict) and 'points' in clickData and len(clickData['points']) > 0:
+        p_click = clickData['points'][0]
+        if 'customdata' in p_click and isinstance(p_click['customdata'], list) and len(p_click['customdata']) > 0:
+            selected_ids = [p_click['customdata'][0]]
+
+    # Se houver itens selecionados, filtra a tabela para exibir SOMENTE ELES
+    if len(selected_ids) > 0:
+        df_tabela = df_sub[df_sub['instancia_id'].isin(selected_ids)]
+    else:
+        df_tabela = df_sub
+
+    return df_tabela.to_dict('records')
 
 
 if __name__ == '__main__':
