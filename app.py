@@ -43,7 +43,16 @@ def preparar_dados():
 
 preparar_dados()
 
-# Escala de cor sequencial customizada (iniciando em 20% da paleta azul)
+# Escala de cor sequencial para o Heatmap (Vermelho suave a profundo, iniciando em ~20%)
+COLORSCALE_REDS_20 = [
+    [0.0, "rgb(254, 224, 210)"],  # Vermelho bem claro (20%)
+    [0.25, "rgb(252, 146, 114)"],
+    [0.5, "rgb(251, 106, 74)"],
+    [0.75, "rgb(222, 45, 38)"],
+    [1.0, "rgb(165, 15, 21)"]     # Vermelho escuro profundo
+]
+
+# Escala de cor sequencial para o gráfico 2D (Azul elegante)
 COLORSCALE_BLUES_20 = [
     [0.0, "rgb(222, 235, 247)"],
     [0.25, "rgb(158, 202, 225)"],
@@ -569,7 +578,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         template="plotly_white"
     )
 
-    # 2. Heatmap de Importância
+    # 2. Heatmap de Importância (Utilizando a nova escala COLORSCALE_REDS_20)
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
@@ -578,7 +587,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             piv = df_h_sub.pivot_table(index='feature', columns='epoca', values=val_col, fill_value=0)
             fig_heat = go.Figure(data=go.Heatmap(
                 z=piv.values, x=piv.columns, y=piv.index, 
-                colorscale=COLORSCALE_BLUES_20,
+                colorscale=COLORSCALE_REDS_20,
                 hovertemplate='Feature: %{y}<br>Época: %{x}<br>Importância Média: %{z:.4f}<extra></extra>'
             ))
             fig_heat.update_layout(
@@ -645,7 +654,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 )
             )
 
-            # Ajuste estrito na barra de cores para mostrar SOMENTE os rótulos 0 e 1
+            # Ajuste estrito na barra de cores para mostrar SOMENTE 0 e 1
             if cor_proj_sel != 'erro_predicao':
                 fig_tsne.update_layout(
                     coloraxis_colorbar=dict(
@@ -683,20 +692,22 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 template="plotly_white"
             )
 
-            # LÓGICA DE FILTRAGEM REATIVA DA TABELA AUXILIAR (BRUSHING / CAIXA / SELEÇÃO MULTIPLA E CLIQUE)
+            # ESTRUTURA DE EXTRAÇÃO E REATIVIDADE PARA SELEÇÃO MULTIPLA / BRUSHING
             selected_ids = []
 
-            # 1ª Prioridade: Seleção por Caixa / Laço (Brushing de 1 ou mais instâncias)
+            # 1ª Prioridade: Brushing (Seleção de caixa/laço de 1 ou mais instâncias no gráfico 2D)
             if selectedData and 'points' in selectedData and len(selectedData['points']) > 0:
                 for pt in selectedData['points']:
                     if 'customdata' in pt and len(pt['customdata']) > 0:
                         selected_ids.append(pt['customdata'][0])
+                # Garantia de remoção de duplicatas mantendo a ordem
+                selected_ids = list(dict.fromkeys(selected_ids))
                 
-            # 2ª Prioridade: Clique em Ponto Único
+            # 2ª Prioridade: Clique pontual em uma única instância
             elif instancia_clicada_id is not None:
                 selected_ids = [instancia_clicada_id]
 
-            # Aplicação do filtro na tabela
+            # Filtra a Tabela Auxiliar de Instâncias de forma estrita para exibir APENAS as selecionadas
             if selected_ids:
                 df_tabela = df_sub[df_sub['instancia_id'].isin(selected_ids)]
             else:
