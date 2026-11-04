@@ -233,7 +233,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
 
 
 # ==========================================
-# 2. INICIALIZAÇÃO DA APLICAÇÃO DASH
+# 2. INICIALIZAÇÃO DA APLICAÇÃO DASH (LAYOUT COM SIDEBAR)
 # ==========================================
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 server = app.server
@@ -241,202 +241,221 @@ server = app.server
 app.layout = html.Div([
     dbc.NavbarSimple(
         brand="Dashboard Analítico XAI (Multi-Dataset & Diagnóstico Temporal)",
-        color="light",
-        dark=False,
+        color="dark",
+        dark=True,
         fluid=True,
-        children=[
-            html.Div([
-                html.Label("Dataset:", style={'marginRight': '10px', 'fontWeight': 'bold'}),
-                dcc.Dropdown(
-                    id='dropdown-dataset',
-                    options=[
-                        {'label': 'Breast Cancer Wisconsin', 'value': 'breast_cancer'},
-                        {'label': 'Wine Quality (Red/White)', 'value': 'wine_quality'},
-                        {'label': 'German Credit (Cost Risk)', 'value': 'german_credit'}
-                    ],
-                    value='breast_cancer',
-                    clearable=False,
-                    style={'width': '250px'}
-                )
-            ], style={'display': 'flex', 'alignItems': 'center'})
-        ]
+        style={'boxShadow': '0 2px 4px rgba(0,0,0,0.1)'}
     ),
 
     dbc.Container([
-        # Filtros Globais
         dbc.Row([
+            # SIDEBAR DE FILTROS E SELEÇÕES
             dbc.Col([
-                html.Label("Método XAI:", style={'fontSize': '12px', 'fontWeight': 'bold'}),
-                dcc.Dropdown(id='dropdown-metodo', options=[], clearable=False, style={'fontSize': '13px'})
-            ], width=3),
-            dbc.Col([
-                html.Label("Métrica Auxiliar (Estabilidade):", style={'fontSize': '12px', 'fontWeight': 'bold'}),
-                dcc.Dropdown(
-                    id='dropdown-metrica-estabilidade',
-                    options=[
-                        {'label': 'Correlação de Spearman (Ranking)', 'value': 'spearman'},
-                        {'label': 'MAD (Desvio Absoluto Médio)', 'value': 'mad_importancia'},
-                        {'label': 'Variância de Importância', 'value': 'variancia_importancia'}
-                    ],
-                    value='spearman',
-                    clearable=False,
-                    style={'fontSize': '13px'}
-                )
-            ], width=3),
-            dbc.Col([
-                html.Label("Mapeamento de Cores (Sankey):", style={'fontSize': '12px', 'fontWeight': 'bold'}),
-                dcc.Dropdown(
-                    id='dropdown-cor-metrica',
-                    options=[
-                        {'label': 'Classe Predita Dominante', 'value': 'classe'},
-                        {'label': 'Taxa de Confiança', 'value': 'confianca'},
-                        {'label': 'Taxa de Erro', 'value': 'erro'}
-                    ],
-                    value='classe',
-                    clearable=False,
-                    style={'fontSize': '13px'}
-                )
-            ], width=3),
-            dbc.Col([
-                html.Label("Filtro de Classe:", style={'fontSize': '12px', 'fontWeight': 'bold'}),
-                dcc.Dropdown(id='dropdown-classe', options=[], value='TODAS', clearable=False, style={'fontSize': '13px'})
-            ], width=3),
-        ], className="my-2"),
-
-        # Slider de Épocas Global
-        dbc.Row([
-            dbc.Col([
-                html.Label("Intervalo de Épocas (Brushing Temporal):", style={'fontSize': '12px', 'fontWeight': 'bold'}),
-                dcc.RangeSlider(id='slider-epocas', min=1, max=40, step=None, marks={1: "Ép 1"}, value=[1, 40])
-            ], width=12)
-        ], className="mb-3"),
-
-        # ==========================================
-        # 1. SANKEY COMO A PRIMEIRA VISUALIZAÇÃO
-        # ==========================================
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Fluxos Temporais de Transição de Classe (Sankey Reativo ao XAI)"),
-                    dbc.CardBody([dcc.Graph(id='sankey-graph', style={'height': '550px'})])
-                ], className="shadow-sm mb-4")
-            ], width=12)
-        ]),
-
-        # Demais Visualizações Globais (Performance e Heatmap)
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Evolução do Modelo: Performance (Loss/Acurácia) e Estabilidade XAI"),
-                    dbc.CardBody([dcc.Graph(id='metrics-stability-combined-graph')])
-                ], className="shadow-sm mb-4")
-            ], width=12, lg=6),
-
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Resumo Global / Heatmap de Importância Temporal"),
-                    dbc.CardBody([dcc.Graph(id='heatmap-graph')])
-                ], className="shadow-sm mb-4")
-            ], width=12, lg=6),
-        ]),
-
-        # ==========================================
-        # 2. REDUÇÃO DE DIMENSIONALIDADE + BOXPLOT TEMPORAL (SEM PERFIL DE INSTÂNCIA)
-        # ==========================================
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Redução de Dimensionalidade Principal (t-SNE / PCA Espacial)"),
-                    dbc.CardBody([
-                        html.Div([
-                            html.Div([
-                                html.Label("Época:", style={'fontSize': '11px', 'fontWeight': 'bold'}),
-                                dcc.Dropdown(id='dim-dropdown-epoca', options=[], clearable=False, style={'fontSize': '12px'})
-                            ], style={'width': '31%', 'display': 'inline-block', 'marginRight': '3%'} ),
-                            html.Div([
-                                html.Label("Algoritmo:", style={'fontSize': '11px', 'fontWeight': 'bold'}),
-                                dcc.Dropdown(
-                                    id='dim-dropdown-algo',
-                                    options=[{'label': 't-SNE', 'value': 'TSNE'}, {'label': 'PCA', 'value': 'PCA'}],
-                                    value='TSNE',
-                                    clearable=False,
-                                    style={'fontSize': '12px'}
-                                )
-                            ], style={'width': '31%', 'display': 'inline-block', 'marginRight': '3%'}),
-                            html.Div([
-                                html.Label("Colorir Por:", style={'fontSize': '11px', 'fontWeight': 'bold'}),
-                                dcc.Dropdown(
-                                    id='dim-dropdown-cor',
-                                    options=[
-                                        {'label': 'Classe Predita', 'value': 'classe_predita'},
-                                        {'label': 'Classe Real', 'value': 'classe_real'},
-                                        {'label': 'Erro de Predição', 'value': 'erro_predicao'}
-                                    ],
-                                    value='classe_predita',
-                                    clearable=False,
-                                    style={'fontSize': '12px'}
-                                )
-                            ], style={'width': '31%', 'display': 'inline-block'}),
-                        ], style={'marginBottom': '8px'}),
-                        html.Div([
-                            dcc.Checklist(
-                                id='dim-toggle-trajetoria',
-                                options=[{'label': ' Traçar Migração Temporal da Instância Clicada', 'value': 'ATIVO'}],
-                                value=[],
-                                style={'fontSize': '11px'}
-                            )
-                        ], style={'marginBottom': '10px'}),
-                        dcc.Graph(
-                            id='dim-scatter-graph',
-                            style={'height': '430px'},
-                            config={'modeBarButtonsToAdd': ['drawrect', 'eraseshape']}
-                        )
-                    ])
-                ], className="shadow-sm mb-4")
-            ], width=12, lg=7),
-
-            # Painel Lateral Apenas com a Análise Auxiliar Temporal (Boxplot)
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Análise Auxiliar Temporal (Boxplot)"),
-                    dbc.CardBody([
-                        dcc.Graph(id='dim-reduction-aux-graph', style={'height': '490px'})
-                    ])
-                ], className="shadow-sm mb-4")
-            ], width=12, lg=5),
-        ]),
-
-        # ==========================================
-        # 3. TABELA AUXILIAR ABAIXO DA REDUÇÃO DE DIMENSIONALIDADE
-        # ==========================================
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Tabela Auxiliar de Instâncias (Seleção por Brushing / Caixa no Gráfico 2D)"),
-                    dbc.CardBody([
-                        dash_table.DataTable(
-                            id='dim-tabela-instancias',
-                            columns=[
-                                {'name': 'Instância ID', 'id': 'instancia_id'},
-                                {'name': 'Época', 'id': 'epoca'},
-                                {'name': 'Método XAI', 'id': 'metodo_xai'},
-                                {'name': 'Classe Real', 'id': 'classe_real'},
-                                {'name': 'Classe Predita', 'id': 'classe_predita'},
-                                {'name': 'Erro Predição', 'id': 'erro_predicao'},
-                                {'name': 'Coord X', 'id': 'tsne_dim_1'},
-                                {'name': 'Coord Y', 'id': 'tsne_dim_2'}
+                html.Div([
+                    html.H5("Painel de Controle", style={'fontWeight': 'bold', 'color': '#1e293b', 'marginBottom': '20px', 'fontSize': '16px'}),
+                    
+                    html.Div([
+                        html.Label("Dataset / Banco de Dados:", style={'fontSize': '12px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        dcc.Dropdown(
+                            id='dropdown-dataset',
+                            options=[
+                                {'label': 'Breast Cancer Wisconsin', 'value': 'breast_cancer'},
+                                {'label': 'Wine Quality (Red/White)', 'value': 'wine_quality'},
+                                {'label': 'German Credit (Cost Risk)', 'value': 'german_credit'}
                             ],
-                            data=[],
-                            page_size=6,
-                            style_table={'overflowX': 'auto'},
-                            style_cell={'textAlign': 'left', 'fontFamily': 'sans-serif', 'fontSize': '12px'},
-                            style_header={'backgroundColor': '#f4f4f4', 'fontWeight': 'bold'}
+                            value='breast_cancer',
+                            clearable=False,
+                            style={'fontSize': '12px', 'marginBottom': '15px'}
+                        ),
+                    ]),
+
+                    html.Div([
+                        html.Label("Método XAI:", style={'fontSize': '12px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        dcc.Dropdown(id='dropdown-metodo', options=[], clearable=False, style={'fontSize': '12px', 'marginBottom': '15px'})
+                    ]),
+
+                    html.Div([
+                        html.Label("Métrica de Estabilidade:", style={'fontSize': '12px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        dcc.Dropdown(
+                            id='dropdown-metrica-estabilidade',
+                            options=[
+                                {'label': 'Correlação de Spearman (Ranking)', 'value': 'spearman'},
+                                {'label': 'MAD (Desvio Absoluto Médio)', 'value': 'mad_importancia'},
+                                {'label': 'Variância de Importância', 'value': 'variancia_importancia'}
+                            ],
+                            value='spearman',
+                            clearable=False,
+                            style={'fontSize': '12px', 'marginBottom': '15px'}
                         )
-                    ])
-                ], className="shadow-sm mb-4")
-            ], width=12)
+                    ]),
+
+                    html.Div([
+                        html.Label("Mapeamento de Cores (Sankey):", style={'fontSize': '12px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        dcc.Dropdown(
+                            id='dropdown-cor-metrica',
+                            options=[
+                                {'label': 'Classe Predita Dominante', 'value': 'classe'},
+                                {'label': 'Taxa de Confiança', 'value': 'confianca'},
+                                {'label': 'Taxa de Erro', 'value': 'erro'}
+                            ],
+                            value='classe',
+                            clearable=False,
+                            style={'fontSize': '12px', 'marginBottom': '15px'}
+                        )
+                    ]),
+
+                    html.Div([
+                        html.Label("Filtro de Classe:", style={'fontSize': '12px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        dcc.Dropdown(id='dropdown-classe', options=[], value='TODAS', clearable=False, style={'fontSize': '12px', 'marginBottom': '15px'})
+                    ]),
+
+                    html.Hr(style={'borderColor': '#cbd5e1'}),
+
+                    html.Div([
+                        html.Label("Intervalo de Épocas (Brushing):", style={'fontSize': '12px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        dcc.RangeSlider(id='slider-epocas', min=1, max=40, step=None, marks={1: "Ép 1"}, value=[1, 40], style={'paddingBottom': '15px'})
+                    ]),
+
+                    html.Hr(style={'borderColor': '#cbd5e1'}),
+
+                    html.H6("Controles 2D (t-SNE/PCA)", style={'fontWeight': 'bold', 'color': '#1e293b', 'marginTop': '15px', 'marginBottom': '10px', 'fontSize': '14px'}),
+                    
+                    html.Div([
+                        html.Label("Época Específica:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        dcc.Dropdown(id='dim-dropdown-epoca', options=[], clearable=False, style={'fontSize': '12px', 'marginBottom': '10px'})
+                    ]),
+
+                    html.Div([
+                        html.Label("Algoritmo de Projeção:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        dcc.Dropdown(
+                            id='dim-dropdown-algo',
+                            options=[{'label': 't-SNE', 'value': 'TSNE'}, {'label': 'PCA', 'value': 'PCA'}],
+                            value='TSNE',
+                            clearable=False,
+                            style={'fontSize': '12px', 'marginBottom': '10px'}
+                        )
+                    ]),
+
+                    html.Div([
+                        html.Label("Colorir Pontos 2D Por:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        dcc.Dropdown(
+                            id='dim-dropdown-cor',
+                            options=[
+                                {'label': 'Classe Predita', 'value': 'classe_predita'},
+                                {'label': 'Classe Real', 'value': 'classe_real'},
+                                {'label': 'Erro de Predição', 'value': 'erro_predicao'}
+                            ],
+                            value='classe_predita',
+                            clearable=False,
+                            style={'fontSize': '12px', 'marginBottom': '10px'}
+                        )
+                    ]),
+
+                    html.Div([
+                        dcc.Checklist(
+                            id='dim-toggle-trajetoria',
+                            options=[{'label': ' Traçar Migração Temporal', 'value': 'ATIVO'}],
+                            value=[],
+                            style={'fontSize': '11px', 'color': '#334155'}
+                        )
+                    ], style={'marginTop': '10px'})
+
+                ], style={
+                    'backgroundColor': '#ffffff',
+                    'padding': '20px',
+                    'borderRadius': '10px',
+                    'boxShadow': '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+                    'border': '1px solid #e2e8f0',
+                    'marginBottom': '20px'
+                })
+            ], width=3),
+
+            # CONTEÚDO PRINCIPAL COM AS VISUALIZAÇÕES
+            dbc.Col([
+                # 1. Sankey como Primeira Visualização
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card([
+                            dbc.CardHeader("Fluxos Temporais de Transição de Classe (Sankey Reativo ao XAI)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                            dbc.CardBody([dcc.Graph(id='sankey-graph', style={'height': '550px'})])
+                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                    ], width=12)
+                ]),
+
+                # 2. Performance e Heatmap
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card([
+                            dbc.CardHeader("Evolução do Modelo: Performance & Estabilidade XAI", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                            dbc.CardBody([dcc.Graph(id='metrics-stability-combined-graph')])
+                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                    ], width=12, lg=6),
+
+                    dbc.Col([
+                        dbc.Card([
+                            dbc.CardHeader("Resumo Global / Heatmap de Importância Temporal", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                            dbc.CardBody([dcc.Graph(id='heatmap-graph')])
+                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                    ], width=12, lg=6),
+                ]),
+
+                # 3. Redução de Dimensionalidade + Boxplot Temporal
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card([
+                            dbc.CardHeader("Redução de Dimensionalidade Principal (t-SNE / PCA Espacial)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                            dbc.CardBody([
+                                dcc.Graph(
+                                    id='dim-scatter-graph',
+                                    style={'height': '460px'},
+                                    config={'modeBarButtonsToAdd': ['drawrect', 'eraseshape']}
+                                )
+                            ])
+                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                    ], width=12, lg=7),
+
+                    dbc.Col([
+                        dbc.Card([
+                            dbc.CardHeader("Análise Auxiliar Temporal (Boxplot)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                            dbc.CardBody([
+                                dcc.Graph(id='dim-reduction-aux-graph', style={'height': '500px'})
+                            ])
+                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                    ], width=12, lg=5),
+                ]),
+
+                # 4. Tabela Auxiliar Abaixo
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card([
+                            dbc.CardHeader("Tabela Auxiliar de Instâncias (Seleção por Brushing / Caixa no Gráfico 2D)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                            dbc.CardBody([
+                                dash_table.DataTable(
+                                    id='dim-tabela-instancias',
+                                    columns=[
+                                        {'name': 'Instância ID', 'id': 'instancia_id'},
+                                        {'name': 'Época', 'id': 'epoca'},
+                                        {'name': 'Método XAI', 'id': 'metodo_xai'},
+                                        {'name': 'Classe Real', 'id': 'classe_real'},
+                                        {'name': 'Classe Predita', 'id': 'classe_predita'},
+                                        {'name': 'Erro Predição', 'id': 'erro_predicao'},
+                                        {'name': 'Coord X', 'id': 'tsne_dim_1'},
+                                        {'name': 'Coord Y', 'id': 'tsne_dim_2'}
+                                    ],
+                                    data=[],
+                                    page_size=6,
+                                    style_table={'overflowX': 'auto'},
+                                    style_cell={'textAlign': 'left', 'fontFamily': 'sans-serif', 'fontSize': '12px'},
+                                    style_header={'backgroundColor': '#f1f5f9', 'fontWeight': 'bold', 'color': '#1e293b'}
+                                )
+                            ])
+                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                    ], width=12)
+                ])
+
+            ], width=9)
         ])
-    ], fluid=True, style={'backgroundColor': '#f8f9fa', 'padding': '20px'})
+    ], fluid=True, style={'backgroundColor': '#f4f7f9', 'padding': '25px', 'minHeight': '100vh'})
 ])
 
 
