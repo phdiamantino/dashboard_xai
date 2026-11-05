@@ -406,7 +406,7 @@ app.layout = html.Div([
                     dbc.Col([
                         dbc.Card([
                             dbc.CardHeader("Resumo Global / Heatmap de Importância Temporal", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
-                            dbc.CardBody([dcc.Graph(id='heatmap-graph')])
+                            dbc.CardBody([dcc.Graph(id='heatmap-graph', style={'height': '550px'})])
                         ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
                     ], width=12, lg=6),
                 ]),
@@ -534,7 +534,7 @@ def update_options(dataset_sel):
     return options_metodo, val_metodo, opt_epocas, val_epoca, min_ep, max_ep, marks_ep, [min_ep, max_ep]
 
 
-# CALLBACK PRINCIPAL: ATUALIZA OS GRÁFICOS E O ESTADO DO BADGE NO CABEÇALHO
+# CALLBACK PRINCIPAL
 @app.callback(
     [Output('metrics-stability-combined-graph', 'figure'),
      Output('heatmap-graph', 'figure'),
@@ -604,7 +604,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         template="plotly_white"
     )
 
-    # 2. Heatmap de Importância com Tooltip Enxuto
+    # 2. Heatmap de Importância Correto (Mostrando todas as features e ajustando dtick no Eixo Y)
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
@@ -622,7 +622,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 df_ranks = piv.rank(ascending=False, method='min', axis=0)
                 num_features = len(piv)
 
-                # Matriz 3D de Strings para o Customdata: [n_features x n_epocas x 2]
+                # Matriz 3D de Strings para o Customdata
                 custom_text = np.empty((piv.shape[0], piv.shape[1], 2), dtype=object)
 
                 cols_list = list(piv.columns)
@@ -630,11 +630,10 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     for j_ep, ep_val in enumerate(cols_list):
                         rank_atual = int(df_ranks.loc[feat_name, ep_val])
                         
-                        # Variação do ranking enxuta (sem parênteses)
                         if j_ep > 0:
                             ep_ant = cols_list[j_ep - 1]
                             rank_ant = int(df_ranks.loc[feat_name, ep_ant])
-                            diff = rank_ant - rank_atual  # Positivo = Subiu no ranking
+                            diff = rank_ant - rank_atual
                             if diff > 0:
                                 var_str = f"▲ Subiu {diff} posição(ões)"
                             elif diff < 0:
@@ -665,8 +664,13 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 ))
                 fig_heat.update_layout(
                     title=f"Heatmap de Importância (Ranked) ({metodo_sel})",
-                    margin=dict(t=30, b=30, l=50, r=20),
-                    template="plotly_white"
+                    margin=dict(t=30, b=30, l=150, r=20),
+                    template="plotly_white",
+                    yaxis=dict(
+                        dtick=1,
+                        automargin=True,
+                        tickfont=dict(size=10)
+                    )
                 )
 
     # DADOS DO SANKEY
