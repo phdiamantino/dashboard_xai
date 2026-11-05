@@ -257,7 +257,7 @@ server = app.server
 
 app.layout = html.Div([
     dbc.NavbarSimple(
-        brand="Dashboard Analítico XAI (Multi-Dataset & Diagnóstico Temporal)",
+        brand="Dashboard Analítico XAI - Diagnóstico Temporal por épocas",
         color="dark",
         dark=True,
         fluid=True,
@@ -604,7 +604,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         template="plotly_white"
     )
 
-    # 2. Heatmap de Importância com Tooltip Enriquecido (Ranking, Variação e Classes)
+    # 2. Heatmap de Importância com Tooltip Enxuto
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
@@ -622,53 +622,30 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 df_ranks = piv.rank(ascending=False, method='min', axis=0)
                 num_features = len(piv)
 
-                # Resumo de Instâncias e Predições por Época
-                resumo_epocas = {}
-                if not df_d3.empty and 'epoca' in df_d3.columns:
-                    df_d3_metodo = df_d3[df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
-                    for ep_val in piv.columns:
-                        sub_ep = df_d3_metodo[df_d3_metodo['epoca'] == ep_val]
-                        if not sub_ep.empty:
-                            tot_inst = sub_ep['instancia_id'].nunique() if 'instancia_id' in sub_ep.columns else len(sub_ep)
-                            c_real_dom = map_cls.get(sub_ep['classe_real'].mode()[0], "N/A") if 'classe_real' in sub_ep.columns and not sub_ep['classe_real'].empty else "N/A"
-                            c_pred_dom = map_cls.get(sub_ep['classe_predita'].mode()[0], "N/A") if 'classe_predita' in sub_ep.columns and not sub_ep['classe_predita'].empty else "N/A"
-                            resumo_epocas[ep_val] = (tot_inst, c_real_dom, c_pred_dom)
-                        else:
-                            resumo_epocas[ep_val] = ("N/A", "N/A", "N/A")
-                else:
-                    for ep_val in piv.columns:
-                        resumo_epocas[ep_val] = ("N/A", "N/A", "N/A")
-
-                # Montagem da Matriz do Customdata para o Tooltip
-                # Matriz 3D de Strings: [n_features x n_epocas x 5]
-                custom_text = np.empty((piv.shape[0], piv.shape[1], 5), dtype=object)
+                # Matriz 3D de Strings para o Customdata: [n_features x n_epocas x 2]
+                custom_text = np.empty((piv.shape[0], piv.shape[1], 2), dtype=object)
 
                 cols_list = list(piv.columns)
                 for i_feat, feat_name in enumerate(piv.index):
                     for j_ep, ep_val in enumerate(cols_list):
                         rank_atual = int(df_ranks.loc[feat_name, ep_val])
                         
-                        # Variação do ranking em relação à época anterior
+                        # Variação do ranking enxuta (sem parênteses)
                         if j_ep > 0:
                             ep_ant = cols_list[j_ep - 1]
                             rank_ant = int(df_ranks.loc[feat_name, ep_ant])
                             diff = rank_ant - rank_atual  # Positivo = Subiu no ranking
                             if diff > 0:
-                                var_str = f"▲ Subiu {diff} posição(ões) (era {rank_ant}º na Época {ep_ant})"
+                                var_str = f"▲ Subiu {diff} posição(ões)"
                             elif diff < 0:
-                                var_str = f"▼ Caiu {abs(diff)} posição(ões) (era {rank_ant}º na Época {ep_ant})"
+                                var_str = f"▼ Caiu {abs(diff)} posição(ões)"
                             else:
-                                var_str = f"▶ Estável (mesma posição da Época {ep_ant})"
+                                var_str = "▶ Estável"
                         else:
-                            var_str = "— (Primeira época analisada)"
-
-                        tot_inst, c_real_dom, c_pred_dom = resumo_epocas.get(ep_val, ("N/A", "N/A", "N/A"))
+                            var_str = "—"
 
                         custom_text[i_feat, j_ep, 0] = f"{rank_atual}º de {num_features}"
                         custom_text[i_feat, j_ep, 1] = var_str
-                        custom_text[i_feat, j_ep, 2] = str(tot_inst)
-                        custom_text[i_feat, j_ep, 3] = str(c_real_dom)
-                        custom_text[i_feat, j_ep, 4] = str(c_pred_dom)
 
                 fig_heat = go.Figure(data=go.Heatmap(
                     z=piv.values,
@@ -682,11 +659,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                         "<b>Valor da Métrica (XAI):</b> %{z:.4f}<br>"
                         "----------------------------------<br>"
                         "<b>Ranking de Importância:</b> %{customdata[0]}<br>"
-                        "<b>Evolução do Ranking:</b> %{customdata[1]}<br>"
-                        "----------------------------------<br>"
-                        "<b>Total Instâncias Analisadas:</b> %{customdata[2]}<br>"
-                        "<b>Classe Real Dominante:</b> %{customdata[3]}<br>"
-                        "<b>Classe Predita Dominante:</b> %{customdata[4]}"
+                        "<b>Evolução do Ranking:</b> %{customdata[1]}"
                         "<extra></extra>"
                     )
                 ))
