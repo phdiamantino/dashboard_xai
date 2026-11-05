@@ -415,7 +415,6 @@ app.layout = html.Div([
                 dbc.Row([
                     dbc.Col([
                         dbc.Card([
-                            # BADGE INCLUÍDO DIRETAMENTE NO CABEÇALHO PARA EVITAR REFERENCE_ERROR
                             dbc.CardHeader([
                                 html.Span("Redução de Dimensionalidade Principal (t-SNE / PCA Espacial)"),
                                 dbc.Badge(
@@ -566,11 +565,11 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
     df_d5 = carregar_csv_seguro("metricas_estabilidade_concordancia", dataset_sel)
     df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
     label_ds = MAPA_DATASET.get(dataset_sel, {}).get('label', dataset_sel.upper())
+    map_cls = Mapeamento_classes_dataset(dataset_sel)
 
     ctx = callback_context
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
 
-    # SE O BADGE FOR CLICADO, IGNORA A SELEÇÃO ATUAL DO SANKEY
     if triggered_id == 'badge-limpar-sankey':
         clickDataSankey = None
 
@@ -605,7 +604,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         template="plotly_white"
     )
 
-    # 2. Heatmap de Importância (Ajustado para ordenar pela Última Época)
+    # 2. Heatmap de Importância com Tooltip Enriquecido (Ranking, Variação e Classes)
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
@@ -614,22 +613,88 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             piv = df_h_sub.pivot_table(index='feature', columns='epoca', values=val_col, fill_value=0)
             
             if not piv.empty:
-                # Seleciona a última época/coluna disponível e ordena de forma crescente
-                # (O maior valor fica na parte superior do eixo Y no Plotly)
+                # Ordenação do Eixo Y pela última época
                 ultima_coluna = piv.columns[-1]
                 ordem_ranking = piv[ultima_coluna].sort_values(ascending=True).index
                 piv = piv.reindex(ordem_ranking)
 
-            fig_heat = go.Figure(data=go.Heatmap(
-                z=piv.values, x=piv.columns, y=piv.index, 
-                colorscale=COLORSCALE_REDS_20,
-                hovertemplate='Feature: %{y}<br>Época: %{x}<br>Importância Média: %{z:.4f}<extra></extra>'
-            ))
-            fig_heat.update_layout(
-                title=f"Heatmap de Importância (Ranked) ({metodo_sel})",
-                margin=dict(t=30, b=30, l=50, r=20),
-                template="plotly_white"
-            )
+                # Cálculo dos Rankings Por Época (1 = mais importante)
+                df_ranks = piv.rank(ascending=False, method='min', axis=0)
+                num_features = len(piv)
+
+                # Resumo de Instâncias e Predições por Época
+                resumo_epocas = {}
+                if not df_d3.empty and 'epoca' in df_d3.columns:
+                    df_d3_metodo = df_d3[df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
+                    for ep_val in piv.columns:
+                        sub_ep = df_d3_metodo[df_d3_metodo['epoca'] == ep_val]
+                        if not sub_ep.empty:
+                            tot_inst = sub_ep['instancia_id'].nunique() if 'instancia_id' in sub_ep.columns else len(sub_ep)
+                            c_real_dom = map_cls.get(sub_ep['classe_real'].mode()[0], "N/A") if 'classe_real' in sub_ep.columns and not sub_ep['classe_real'].empty else "N/A"
+                            c_pred_dom = map_cls.get(sub_ep['classe_predita'].mode()[0], "N/A") if 'classe_predita' in sub_ep.columns and not sub_ep['classe_predita'].empty else "N/A"
+                            resumo_epocas[ep_val] = (tot_inst, c_real_dom, c_pred_dom)
+                        else:
+                            resumo_epocas[ep_val] = ("N/A", "N/A", "N/A")
+                else:
+                    for ep_val in piv.columns:
+                        resumo_epocas[ep_val] = ("N/A", "N/A", "N/A")
+
+                # Montagem da Matriz do Customdata para o Tooltip
+                # Matriz 3D de Strings: [n_features x n_epocas x 5]
+                custom_text = np.empty((piv.shape[0], piv.shape[1], 5), dtype=object)
+
+                cols_list = list(piv.columns)
+                for i_feat, feat_name in enumerate(piv.index):
+                    for j_ep, ep_val in enumerate(cols_list):
+                        rank_atual = int(df_ranks.loc[feat_name, ep_val])
+                        
+                        # Variação do ranking em relação à época anterior
+                        if j_ep > 0:
+                            ep_ant = cols_list[j_ep - 1]
+                            rank_ant = int(df_ranks.loc[feat_name, ep_ant])
+                            diff = rank_ant - rank_atual  # Positivo = Subiu no ranking
+                            if diff > 0:
+                                var_str = f"▲ Subiu {diff} posição(ões) (era {rank_ant}º na Época {ep_ant})"
+                            elif diff < 0:
+                                var_str = f"▼ Caiu {abs(diff)} posição(ões) (era {rank_ant}º na Época {ep_ant})"
+                            else:
+                                var_str = f"▶ Estável (mesma posição da Época {ep_ant})"
+                        else:
+                            var_str = "— (Primeira época analisada)"
+
+                        tot_inst, c_real_dom, c_pred_dom = resumo_epocas.get(ep_val, ("N/A", "N/A", "N/A"))
+
+                        custom_text[i_feat, j_ep, 0] = f"{rank_atual}º de {num_features}"
+                        custom_text[i_feat, j_ep, 1] = var_str
+                        custom_text[i_feat, j_ep, 2] = str(tot_inst)
+                        custom_text[i_feat, j_ep, 3] = str(c_real_dom)
+                        custom_text[i_feat, j_ep, 4] = str(c_pred_dom)
+
+                fig_heat = go.Figure(data=go.Heatmap(
+                    z=piv.values,
+                    x=piv.columns,
+                    y=piv.index,
+                    customdata=custom_text,
+                    colorscale=COLORSCALE_REDS_20,
+                    hovertemplate=(
+                        "<b>Época:</b> %{x}<br>"
+                        "<b>Feature:</b> %{y}<br>"
+                        "<b>Valor da Métrica (XAI):</b> %{z:.4f}<br>"
+                        "----------------------------------<br>"
+                        "<b>Ranking de Importância:</b> %{customdata[0]}<br>"
+                        "<b>Evolução do Ranking:</b> %{customdata[1]}<br>"
+                        "----------------------------------<br>"
+                        "<b>Total Instâncias Analisadas:</b> %{customdata[2]}<br>"
+                        "<b>Classe Real Dominante:</b> %{customdata[3]}<br>"
+                        "<b>Classe Predita Dominante:</b> %{customdata[4]}"
+                        "<extra></extra>"
+                    )
+                ))
+                fig_heat.update_layout(
+                    title=f"Heatmap de Importância (Ranked) ({metodo_sel})",
+                    margin=dict(t=30, b=30, l=50, r=20),
+                    template="plotly_white"
+                )
 
     # DADOS DO SANKEY
     df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
@@ -638,13 +703,11 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
     instancias_selecionadas_tabela = []
     instancias_destaque_sankey = []
 
-    # LÊ SELEÇÃO DA TABELA
     if selected_rows_table and table_data:
         for r_idx in selected_rows_table:
             if r_idx < len(table_data):
                 instancias_selecionadas_tabela.append(str(table_data[r_idx]['instancia_id']))
 
-    # CLIQUE EM FLUXO DO SANKEY
     if triggered_id != 'badge-limpar-sankey' and not instancias_selecionadas_tabela and clickDataSankey and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
         pt_s = clickDataSankey['points'][0]
         if 'pointNumber' in pt_s and not df_sankey_processed.empty:
@@ -657,13 +720,11 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 lista_raw = df_filtered_s.iloc[flow_idx]['lista_instancias']
                 instancias_destaque_sankey = [str(x) for x in lista_raw]
 
-    # CLIQUE NO GRÁFICO 2D
     if not instancias_selecionadas_tabela and clickDataScatter and 'points' in clickDataScatter and len(clickDataScatter['points']) > 0:
         p_click = clickDataScatter['points'][0]
         if 'customdata' in p_click and len(p_click['customdata']) > 0:
             instancias_selecionadas_tabela.append(str(p_click['customdata'][0]))
 
-    # ATUALIZA CONTEÚDO E VISIBILIDADE DO BADGE
     if instancias_destaque_sankey:
         badge_children = [
             f"Instâncias do Fluxo Sankey ({len(instancias_destaque_sankey)}) ",
@@ -741,7 +802,6 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     )
                 )
 
-            # DESTAQUE DE INSTÂNCIAS VINDAS DO SANKEY
             if instancias_destaque_sankey:
                 df_sankey_pts = df_sub[df_sub['instancia_id'].isin(instancias_destaque_sankey)]
                 if not df_sankey_pts.empty:
@@ -751,7 +811,6 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                         showlegend=False, hoverinfo='skip'
                     ))
 
-            # TRAJETÓRIA TEMPORAL
             if 'ATIVO' in trajetoria_sel and len(instancias_selecionadas_tabela) == 1:
                 inst_id_traj = instancias_selecionadas_tabela[0]
                 df_traj = df_d6[
@@ -765,7 +824,6 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     marker=dict(size=12, color='#f59e0b', symbol='diamond'), name=f'Trajetória ID #{inst_id_traj}'
                 ))
 
-            # DESTAQUE DE INSTÂNCIAS MARCADAS NA TABELA
             if instancias_selecionadas_tabela:
                 pontos_clicados = df_sub[df_sub['instancia_id'].isin(instancias_selecionadas_tabela)]
                 if not pontos_clicados.empty:
@@ -816,7 +874,6 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             ]
 
         if not df_filtered.empty:
-            map_cls = Mapeamento_classes_dataset(dataset_sel)
             epocas_unicas = sorted(list(set(df_filtered['epoca_origem']).union(set(df_filtered['epoca_destino']))))
             classes_unicas = [0, 1]
 
@@ -908,7 +965,6 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
     ctx = callback_context
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
 
-    # LIMPA FILTRO SE O BADGE FOR CLICADO
     if triggered_id == 'badge-limpar-sankey':
         clickDataSankey = None
 
@@ -940,7 +996,6 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
 
     selected_ids = []
 
-    # CLIQUE EM FLUXO DO SANKEY
     if triggered_id != 'badge-limpar-sankey' and clickDataSankey and isinstance(clickDataSankey, dict) and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
         pt_s = clickDataSankey['points'][0]
         if 'pointNumber' in pt_s:
@@ -954,7 +1009,6 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
                 if pt_s['pointNumber'] < len(df_fil):
                     selected_ids = [str(x) for x in df_fil.iloc[pt_s['pointNumber']]['lista_instancias']]
 
-    # BRUSHING OU DUPLO CLIQUE NO GRÁFICO 2D
     if not selected_ids:
         if selectedData is not None and isinstance(selectedData, dict):
             pts = selectedData.get('points', [])
@@ -966,13 +1020,11 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
             else:
                 selected_ids = []
 
-    # CLIQUE EM PONTO DO GRÁFICO 2D
     elif not selected_ids and clickDataScatter and isinstance(clickDataScatter, dict) and 'points' in clickDataScatter and len(clickDataScatter['points']) > 0:
         p_click = clickDataScatter['points'][0]
         if 'customdata' in p_click and isinstance(p_click['customdata'], list) and len(p_click['customdata']) > 0:
             selected_ids = [str(p_click['customdata'][0])]
 
-    # RETORNA A TABELA FILTRADA OU COMPLETA
     if len(selected_ids) > 0:
         df_tabela = df_sub[df_sub['instancia_id'].isin(selected_ids)]
     else:
