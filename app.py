@@ -579,20 +579,26 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         template="plotly_white"
     )
 
-    # 2. Heatmap de Importância
+    # 2. Heatmap de Importância (Ordenado pelo Ranking das Features no Eixo Y)
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
         if not df_h_sub.empty:
             val_col = 'importancia_media' if 'importancia_media' in df_h_sub.columns else df_h_sub.columns[-1]
             piv = df_h_sub.pivot_table(index='feature', columns='epoca', values=val_col, fill_value=0)
+            
+            # ORDENAÇÃO POR RANKING: Ordena as features em ordem crescente de média global (de baixo para cima)
+            # Dessa forma, a feature mais importante (maior valor médio) fica no topo do eixo Y.
+            ordem_ranking = piv.mean(axis=1).sort_values(ascending=True).index
+            piv = piv.reindex(ordem_ranking)
+
             fig_heat = go.Figure(data=go.Heatmap(
                 z=piv.values, x=piv.columns, y=piv.index, 
                 colorscale=COLORSCALE_REDS_20,
                 hovertemplate='Feature: %{y}<br>Época: %{x}<br>Importância Média: %{z:.4f}<extra></extra>'
             ))
             fig_heat.update_layout(
-                title=f"Heatmap de Importância ({metodo_sel})",
+                title=f"Heatmap de Importância (Ranked) ({metodo_sel})",
                 margin=dict(t=30, b=30, l=50, r=20),
                 template="plotly_white"
             )
