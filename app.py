@@ -605,7 +605,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         template="plotly_white"
     )
 
-    # 2. Heatmap de Importância
+    # 2. Heatmap de Importância (Ajustado para ordenar pela Última Época)
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
@@ -613,8 +613,12 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             val_col = 'importancia_media' if 'importancia_media' in df_h_sub.columns else df_h_sub.columns[-1]
             piv = df_h_sub.pivot_table(index='feature', columns='epoca', values=val_col, fill_value=0)
             
-            ordem_ranking = piv.mean(axis=1).sort_values(ascending=True).index
-            piv = piv.reindex(ordem_ranking)
+            if not piv.empty:
+                # Seleciona a última época/coluna disponível e ordena de forma crescente
+                # (O maior valor fica na parte superior do eixo Y no Plotly)
+                ultima_coluna = piv.columns[-1]
+                ordem_ranking = piv[ultima_coluna].sort_values(ascending=True).index
+                piv = piv.reindex(ordem_ranking)
 
             fig_heat = go.Figure(data=go.Heatmap(
                 z=piv.values, x=piv.columns, y=piv.index, 
