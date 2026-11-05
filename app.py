@@ -4,7 +4,7 @@ import glob
 import shutil
 import gdown
 import dash
-from dash import dcc, html, Input, Output, State, dash_table, callback_context
+from dash import dcc, html, Input, Output, State, dash_table
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
@@ -415,19 +415,7 @@ app.layout = html.Div([
                 dbc.Row([
                     dbc.Col([
                         dbc.Card([
-                            dbc.CardHeader([
-                                html.Div([
-                                    html.Span("Redução de Dimensionalidade Principal (t-SNE / PCA Espacial)"),
-                                    # BOTÃO ADICIONADO PARA DESMARCAR/LIMPAR O SANKEY
-                                    dbc.Button(
-                                        "Limpar Seleção Sankey",
-                                        id="btn-limpar-sankey",
-                                        color="outline-danger",
-                                        size="sm",
-                                        style={'fontSize': '11px', 'padding': '2px 8px'}
-                                    )
-                                ], className="d-flex justify-content-between align-items-center")
-                            ], style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                            dbc.CardHeader("Redução de Dimensionalidade Principal (t-SNE / PCA Espacial)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
                             dbc.CardBody([
                                 dcc.Graph(
                                     id='dim-scatter-graph',
@@ -549,25 +537,16 @@ def update_options(dataset_sel):
      Input('dim-toggle-trajetoria', 'value'),
      Input('dim-scatter-graph', 'clickData'),
      Input('sankey-graph', 'clickData'),
-     Input('dim-tabela-instancias', 'selected_rows'),
-     Input('btn-limpar-sankey', 'n_clicks')], # O BOTÃO LIMPAR FOI ADICIONADO AQUI
+     Input('dim-tabela-instancias', 'selected_rows')],
     [State('dim-tabela-instancias', 'data')]
 )
-def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, epocas_sel, epoca_proj_sel, algo_sel, cor_proj_sel, trajetoria_sel, clickDataScatter, clickDataSankey, selected_rows_table, btn_limpar_sankey, table_data):
+def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, epocas_sel, epoca_proj_sel, algo_sel, cor_proj_sel, trajetoria_sel, clickDataScatter, clickDataSankey, selected_rows_table, table_data):
     df_d2 = carregar_csv_seguro("metricas_epocas", dataset_sel)
     df_d4 = carregar_csv_seguro("resumo_explicacoes", dataset_sel)
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
     df_d5 = carregar_csv_seguro("metricas_estabilidade_concordancia", dataset_sel)
     df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
     label_ds = MAPA_DATASET.get(dataset_sel, {}).get('label', dataset_sel.upper())
-
-    # VERIFICA QUAL COMPONENTE DISPAROU O CALLBACK
-    ctx = callback_context
-    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
-
-    # SE O BOTÃO DE LIMPAR SANKEY FOI CLICADO, DESCONSIDERA O CLIQUE NO SANKEY
-    if triggered_id == 'btn-limpar-sankey':
-        clickDataSankey = None
 
     # 1. Performance + Estabilidade XAI
     fig_combined = go.Figure()
@@ -600,7 +579,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         template="plotly_white"
     )
 
-    # 2. Heatmap de Importância (Ranked)
+    # 2. Heatmap de Importância (Ordenado pelo Ranking das Features no Eixo Y)
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
@@ -608,7 +587,8 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             val_col = 'importancia_media' if 'importancia_media' in df_h_sub.columns else df_h_sub.columns[-1]
             piv = df_h_sub.pivot_table(index='feature', columns='epoca', values=val_col, fill_value=0)
             
-            # ORDENAÇÃO POR RANKING (As mais importantes no topo)
+            # ORDENAÇÃO POR RANKING: Ordena as features em ordem crescente de média global (de baixo para cima)
+            # Dessa forma, a feature mais importante (maior valor médio) fica no topo do eixo Y.
             ordem_ranking = piv.mean(axis=1).sort_values(ascending=True).index
             piv = piv.reindex(ordem_ranking)
 
@@ -636,8 +616,8 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             if r_idx < len(table_data):
                 instancias_selecionadas_tabela.append(str(table_data[r_idx]['instancia_id']))
 
-    # CLIQUE EM FLUXO DO SANKEY DESTACA NO GRÁFICO 2D (APENAS SE NÃO FOI CLICADO EM LIMPAR)
-    if triggered_id != 'btn-limpar-sankey' and not instancias_selecionadas_tabela and clickDataSankey and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
+    # CLIQUE EM FLUXO DO SANKEY DESTACA NO GRÁFICO 2D
+    if not instancias_selecionadas_tabela and clickDataSankey and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
         pt_s = clickDataSankey['points'][0]
         if 'pointNumber' in pt_s and not df_sankey_processed.empty:
             flow_idx = pt_s['pointNumber']
@@ -870,21 +850,13 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
      Input('dropdown-metodo', 'value'),
      Input('dim-dropdown-epoca', 'value'),
      Input('dim-dropdown-algo', 'value'),
-     Input('slider-epocas', 'value'),
-     Input('btn-limpar-sankey', 'n_clicks')] # ESCUTA O CLIQUE DO BOTÃO TAMBÉM
+     Input('slider-epocas', 'value')]
 )
-def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey, dataset_sel, metodo_sel, epoca_proj_sel, algo_sel, epocas_sel, btn_limpar_sankey):
+def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey, dataset_sel, metodo_sel, epoca_proj_sel, algo_sel, epocas_sel):
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
     df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
     if df_d6.empty:
         return []
-
-    ctx = callback_context
-    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
-
-    # SE O BOTÃO DE LIMPAR SANKEY FOI CLICADO, IGNORA O SELETO DO SANKEY
-    if triggered_id == 'btn-limpar-sankey':
-        clickDataSankey = None
 
     epoca_alvo = epoca_proj_sel if epoca_proj_sel else (df_d6['epoca'].min() if 'epoca' in df_d6.columns else 1)
     df_sub = df_d6[
@@ -914,8 +886,8 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
 
     selected_ids = []
 
-    # CLIQUE EM FLUXO DO SANKEY (APENAS SE O BOTÃO LIMPAR NÃO FOI ACIONADO)
-    if triggered_id != 'btn-limpar-sankey' and clickDataSankey and isinstance(clickDataSankey, dict) and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
+    # CLIQUE EM FLUXO DO SANKEY
+    if clickDataSankey and isinstance(clickDataSankey, dict) and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
         pt_s = clickDataSankey['points'][0]
         if 'pointNumber' in pt_s:
             df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
