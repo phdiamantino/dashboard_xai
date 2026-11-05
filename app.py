@@ -252,7 +252,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
 # ==========================================
 # 2. INICIALIZAÇÃO DA APLICAÇÃO DASH
 # ==========================================
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 server = app.server
 
 app.layout = html.Div([
@@ -415,7 +415,6 @@ app.layout = html.Div([
                 dbc.Row([
                     dbc.Col([
                         dbc.Card([
-                            # CABEÇALHO ATUALIZADO: Rótulo do Sankey posicionado no topo
                             dbc.CardHeader([
                                 html.Span("Redução de Dimensionalidade Principal (t-SNE / PCA Espacial)"),
                                 html.Span(id='container-badge-sankey')
@@ -554,7 +553,6 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
     df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
     label_ds = MAPA_DATASET.get(dataset_sel, {}).get('label', dataset_sel.upper())
 
-    # IDENTIFICA O DISPARADOR DO CALLBACK
     ctx = callback_context
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
 
@@ -727,7 +725,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     )
                 )
 
-            # DESTAQUE DAS INSTÂNCIAS DO SANKEY (SEM SHOWLEGEND PARA NÃO DISTORCER O GRÁFICO 2D)
+            # DESTAQUE DAS INSTÂNCIAS DO SANKEY
             if instancias_destaque_sankey:
                 df_sankey_pts = df_sub[df_sub['instancia_id'].isin(instancias_destaque_sankey)]
                 if not df_sankey_pts.empty:
@@ -737,7 +735,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                         showlegend=False, hoverinfo='skip'
                     ))
 
-            # TRAJETÓRIA TEMPORAL (SE HOUVER APENAS 1 INSTÂNCIA SELECIONADA)
+            # TRAJETÓRIA TEMPORAL
             if 'ATIVO' in trajetoria_sel and len(instancias_selecionadas_tabela) == 1:
                 inst_id_traj = instancias_selecionadas_tabela[0]
                 df_traj = df_d6[
@@ -751,7 +749,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     marker=dict(size=12, color='#f59e0b', symbol='diamond'), name=f'Trajetória ID #{inst_id_traj}'
                 ))
 
-            # DESTAQUE DAS INSTÂNCIAS MARCADAS COM CÍRCULO AMARELO
+            # DESTAQUE DAS INSTÂNCIAS SELECIONADAS NA TABELA
             if instancias_selecionadas_tabela:
                 pontos_clicados = df_sub[df_sub['instancia_id'].isin(instancias_selecionadas_tabela)]
                 if not pontos_clicados.empty:
@@ -882,10 +880,9 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
      Input('dropdown-metodo', 'value'),
      Input('dim-dropdown-epoca', 'value'),
      Input('dim-dropdown-algo', 'value'),
-     Input('slider-epocas', 'value'),
-     Input('badge-limpar-sankey', 'n_clicks')]
+     Input('slider-epocas', 'value')]
 )
-def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey, dataset_sel, metodo_sel, epoca_proj_sel, algo_sel, epocas_sel, btn_badge_clicks):
+def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey, dataset_sel, metodo_sel, epoca_proj_sel, algo_sel, epocas_sel):
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
     df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
     if df_d6.empty:
@@ -893,10 +890,6 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
 
     ctx = callback_context
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
-
-    # RESET VIA BADGE DO SANKEY
-    if triggered_id == 'badge-limpar-sankey':
-        clickDataSankey = None
 
     epoca_alvo = epoca_proj_sel if epoca_proj_sel else (df_d6['epoca'].min() if 'epoca' in df_d6.columns else 1)
     df_sub = df_d6[
@@ -927,7 +920,7 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
     selected_ids = []
 
     # 1. CLIQUE EM FLUXO DO SANKEY
-    if triggered_id != 'badge-limpar-sankey' and clickDataSankey and isinstance(clickDataSankey, dict) and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
+    if clickDataSankey and isinstance(clickDataSankey, dict) and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
         pt_s = clickDataSankey['points'][0]
         if 'pointNumber' in pt_s:
             df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
@@ -940,7 +933,7 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
                 if pt_s['pointNumber'] < len(df_fil):
                     selected_ids = [str(x) for x in df_fil.iloc[pt_s['pointNumber']]['lista_instancias']]
 
-    # 2. BRUSHING / SELEÇÃO DE ÁREA OU RESET NO GRÁFICO 2D
+    # 2. BRUSHING / SELEÇÃO DE ÁRA NO GRÁFICO 2D
     if not selected_ids:
         if selectedData is not None and isinstance(selectedData, dict):
             pts = selectedData.get('points', [])
@@ -958,7 +951,7 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
         if 'customdata' in p_click and isinstance(p_click['customdata'], list) and len(p_click['customdata']) > 0:
             selected_ids = [str(p_click['customdata'][0])]
 
-    # RETORNA APENAS AS INSTÂNCIAS FILTRADAS OU A TABELA COMPLETA ORIGINAL
+    # RETORNA A TABELA COMPLETA OU FILTRADA
     if len(selected_ids) > 0:
         df_tabela = df_sub[df_sub['instancia_id'].isin(selected_ids)]
     else:
