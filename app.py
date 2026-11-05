@@ -415,6 +415,7 @@ app.layout = html.Div([
                 dbc.Row([
                     dbc.Col([
                         dbc.Card([
+                            # CABEÇALHO DO CONTAINER COM O BADGE DO SANKEY ALINHADO NO TOPO
                             dbc.CardHeader([
                                 html.Span("Redução de Dimensionalidade Principal (t-SNE / PCA Espacial)"),
                                 html.Span(id='container-badge-sankey')
@@ -522,7 +523,7 @@ def update_options(dataset_sel):
     return options_metodo, val_metodo, opt_epocas, val_epoca, min_ep, max_ep, marks_ep, [min_ep, max_ep]
 
 
-# CALLBACK PRINCIPAL: ATUALIZA OS GRÁFICOS E O BADGE DE LIMPEZA
+# CALLBACK PRINCIPAL: ATUALIZA OS GRÁFICOS E RETORNA O BADGE NO TOPO DO CONTAINER
 @app.callback(
     [Output('metrics-stability-combined-graph', 'figure'),
      Output('heatmap-graph', 'figure'),
@@ -556,7 +557,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
     ctx = callback_context
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
 
-    # SE O BOTÃO/BADGE NO TOPO FOI CLICADO, IGNORA O SELETO DO SANKEY
+    # SE O BADGE NO TOPO FOR CLICADO, IGNORA A SELEÇÃO DO SANKEY
     if triggered_id == 'badge-limpar-sankey':
         clickDataSankey = None
 
@@ -645,7 +646,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         if 'customdata' in p_click and len(p_click['customdata']) > 0:
             instancias_selecionadas_tabela.append(str(p_click['customdata'][0]))
 
-    # CRIAÇÃO DO BADGE NO TOPO SE HOUVER INSTÂNCIAS VINDAS DO SANKEY
+    # ELEMENTO BADGE NO TOPO DO CONTAINER (FORA DA ÁREA DO PLOTLY)
     badge_sankey_element = []
     if instancias_destaque_sankey:
         badge_sankey_element = dbc.Badge(
@@ -725,7 +726,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     )
                 )
 
-            # DESTAQUE DAS INSTÂNCIAS DO SANKEY
+            # DESTAQUE DE INSTÂNCIAS DO SANKEY (SEM DESAJUSTAR A LEGENDA OU O GRÁFICO 2D)
             if instancias_destaque_sankey:
                 df_sankey_pts = df_sub[df_sub['instancia_id'].isin(instancias_destaque_sankey)]
                 if not df_sankey_pts.empty:
@@ -735,7 +736,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                         showlegend=False, hoverinfo='skip'
                     ))
 
-            # TRAJETÓRIA TEMPORAL
+            # TRAJETÓRIA TEMPORAL (SE HOUVER APENAS 1 INSTÂNCIA SELECIONADA)
             if 'ATIVO' in trajetoria_sel and len(instancias_selecionadas_tabela) == 1:
                 inst_id_traj = instancias_selecionadas_tabela[0]
                 df_traj = df_d6[
@@ -749,7 +750,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     marker=dict(size=12, color='#f59e0b', symbol='diamond'), name=f'Trajetória ID #{inst_id_traj}'
                 ))
 
-            # DESTAQUE DAS INSTÂNCIAS SELECIONADAS NA TABELA
+            # DESTAQUE DAS INSTÂNCIAS MARCADAS NA TABELA COM CÍRCULO AMARELO
             if instancias_selecionadas_tabela:
                 pontos_clicados = df_sub[df_sub['instancia_id'].isin(instancias_selecionadas_tabela)]
                 if not pontos_clicados.empty:
@@ -870,7 +871,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
     return fig_combined, fig_heat, fig_tsne, fig_dim_aux, fig_sankey, badge_sankey_element
 
 
-# CALLBACK 2 INDEPENDENTE: ATUALIZAÇÃO DA TABELA VIA INTERAÇÕES
+# CALLBACK 2 INDEPENDENTE: ATUALIZAÇÃO DA TABELA VIA INTERAÇÕES DE GRÁFICO
 @app.callback(
     Output('dim-tabela-instancias', 'data'),
     [Input('dim-scatter-graph', 'selectedData'),
@@ -887,9 +888,6 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
     df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
     if df_d6.empty:
         return []
-
-    ctx = callback_context
-    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
 
     epoca_alvo = epoca_proj_sel if epoca_proj_sel else (df_d6['epoca'].min() if 'epoca' in df_d6.columns else 1)
     df_sub = df_d6[
@@ -919,7 +917,7 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
 
     selected_ids = []
 
-    # 1. CLIQUE EM FLUXO DO SANKEY
+    # CLIQUE EM FLUXO DO SANKEY
     if clickDataSankey and isinstance(clickDataSankey, dict) and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
         pt_s = clickDataSankey['points'][0]
         if 'pointNumber' in pt_s:
@@ -933,7 +931,7 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
                 if pt_s['pointNumber'] < len(df_fil):
                     selected_ids = [str(x) for x in df_fil.iloc[pt_s['pointNumber']]['lista_instancias']]
 
-    # 2. BRUSHING / SELEÇÃO DE ÁRA NO GRÁFICO 2D
+    # BRUSHING / CAIXA OU DUPLO CLIQUE (RESET) NO GRÁFICO 2D
     if not selected_ids:
         if selectedData is not None and isinstance(selectedData, dict):
             pts = selectedData.get('points', [])
@@ -945,13 +943,13 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
             else:
                 selected_ids = []
 
-    # 3. CLIQUE EM PONTO DO GRÁFICO 2D
-    if not selected_ids and clickDataScatter and isinstance(clickDataScatter, dict) and 'points' in clickDataScatter and len(clickDataScatter['points']) > 0:
+    # CLIQUE EM PONTO DO GRÁFICO 2D
+    elif not selected_ids and clickDataScatter and isinstance(clickDataScatter, dict) and 'points' in clickDataScatter and len(clickDataScatter['points']) > 0:
         p_click = clickDataScatter['points'][0]
         if 'customdata' in p_click and isinstance(p_click['customdata'], list) and len(p_click['customdata']) > 0:
             selected_ids = [str(p_click['customdata'][0])]
 
-    # RETORNA A TABELA COMPLETA OU FILTRADA
+    # RETORNA INSTÂNCIAS FILTRADAS OU A TABELA COMPLETA ORIGINAL
     if len(selected_ids) > 0:
         df_tabela = df_sub[df_sub['instancia_id'].isin(selected_ids)]
     else:
