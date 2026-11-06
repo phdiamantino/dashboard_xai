@@ -570,6 +570,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
     ctx = callback_context
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
 
+    # OTIMIZAÇÃO: RESET IMEDIATO AO CLICAR NO BOTÃO X DO BADGE
     if triggered_id == 'badge-limpar-sankey':
         clickDataSankey = None
 
@@ -604,7 +605,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         template="plotly_white"
     )
 
-    # 2. Heatmap de Importância Correto
+    # 2. Heatmap de Importância
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
@@ -613,16 +614,13 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             piv = df_h_sub.pivot_table(index='feature', columns='epoca', values=val_col, fill_value=0)
             
             if not piv.empty:
-                # Ordenação do Eixo Y pela última época
                 ultima_coluna = piv.columns[-1]
                 ordem_ranking = piv[ultima_coluna].sort_values(ascending=True).index
                 piv = piv.reindex(ordem_ranking)
 
-                # Cálculo dos Rankings Por Época (1 = mais importante)
                 df_ranks = piv.rank(ascending=False, method='min', axis=0)
                 num_features = len(piv)
 
-                # Matriz 3D de Strings para o Customdata
                 custom_text = np.empty((piv.shape[0], piv.shape[1], 2), dtype=object)
 
                 cols_list = list(piv.columns)
@@ -673,10 +671,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     )
                 )
 
-    # DADOS DO SANKEY
-    df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
-    df_sankey_processed, _, df_trans_raw = processar_dados_sankey(df_d3_sankey, df_d2_sankey, dataset_sel)
-
+    # DADOS DO SANKEY (AVALIA SELEÇÃO APENAS SE O BOTÃO DE LIMPAR NÃO FOI ACIONADO)
     instancias_selecionadas_tabela = []
     instancias_destaque_sankey = []
 
@@ -686,6 +681,9 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 instancias_selecionadas_tabela.append(str(table_data[r_idx]['instancia_id']))
 
     if triggered_id != 'badge-limpar-sankey' and not instancias_selecionadas_tabela and clickDataSankey and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
+        df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
+        df_sankey_processed, _, _ = processar_dados_sankey(df_d3_sankey, df_d2_sankey, dataset_sel)
+        
         pt_s = clickDataSankey['points'][0]
         if 'pointNumber' in pt_s and not df_sankey_processed.empty:
             flow_idx = pt_s['pointNumber']
@@ -696,13 +694,16 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             if flow_idx < len(df_filtered_s):
                 lista_raw = df_filtered_s.iloc[flow_idx]['lista_instancias']
                 instancias_destaque_sankey = [str(x) for x in lista_raw]
+    else:
+        df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
+        df_sankey_processed, _, _ = processar_dados_sankey(df_d3_sankey, df_d2_sankey, dataset_sel)
 
     if not instancias_selecionadas_tabela and clickDataScatter and 'points' in clickDataScatter and len(clickDataScatter['points']) > 0:
         p_click = clickDataScatter['points'][0]
         if 'customdata' in p_click and len(p_click['customdata']) > 0:
             instancias_selecionadas_tabela.append(str(p_click['customdata'][0]))
 
-    if instancias_destaque_sankey:
+    if instancias_destaque_sankey and triggered_id != 'badge-limpar-sankey':
         badge_children = [
             f"Instâncias do Fluxo Sankey ({len(instancias_destaque_sankey)}) ",
             html.Span("✕", style={'fontWeight': 'bold', 'marginLeft': '4px'})
@@ -779,7 +780,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     )
                 )
 
-            if instancias_destaque_sankey:
+            if instancias_destaque_sankey and triggered_id != 'badge-limpar-sankey':
                 df_sankey_pts = df_sub[df_sub['instancia_id'].isin(instancias_destaque_sankey)]
                 if not df_sankey_pts.empty:
                     fig_tsne.add_trace(go.Scatter(
@@ -820,7 +821,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 selectdirection='any'
             )
 
-    # 4. Boxplot Auxiliar (Altura Ajustada para 460px)
+    # 4. Boxplot Auxiliar (460px)
     fig_dim_aux = go.Figure()
     if not df_d6.empty and 'tsne_dim_1' in df_d6.columns:
         df_aux_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
@@ -920,7 +921,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
     return fig_combined, fig_heat, fig_tsne, fig_dim_aux, fig_sankey, badge_children, badge_style
 
 
-# CALLBACK 2 INDEPENDENTE: ATUALIZAÇÃO DA TABELA
+# CALLBACK 2 INDEPENDENTE: ATUALIZAÇÃO DA TABELA (OTIMIZADO)
 @app.callback(
     Output('dim-tabela-instancias', 'data'),
     [Input('dim-scatter-graph', 'selectedData'),
@@ -941,9 +942,6 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
 
     ctx = callback_context
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
-
-    if triggered_id == 'badge-limpar-sankey':
-        clickDataSankey = None
 
     epoca_alvo = epoca_proj_sel if epoca_proj_sel else (df_d6['epoca'].min() if 'epoca' in df_d6.columns else 1)
     df_sub = df_d6[
@@ -971,9 +969,14 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
                 pca_df['instancia_id'] = pivot.index.astype(str)
                 df_sub = df_sub.merge(pca_df, on='instancia_id', how='inner')
 
+    # RETORNO IMEDIATO SEM PROCESSAMENTO SE O BOTÃO ✕ FOI CLICADO
+    if triggered_id == 'badge-limpar-sankey':
+        return df_sub.to_dict('records')
+
     selected_ids = []
 
-    if triggered_id != 'badge-limpar-sankey' and clickDataSankey and isinstance(clickDataSankey, dict) and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
+    # FLUXO SANKEY
+    if clickDataSankey and isinstance(clickDataSankey, dict) and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
         pt_s = clickDataSankey['points'][0]
         if 'pointNumber' in pt_s:
             df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
@@ -986,6 +989,7 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
                 if pt_s['pointNumber'] < len(df_fil):
                     selected_ids = [str(x) for x in df_fil.iloc[pt_s['pointNumber']]['lista_instancias']]
 
+    # BRUSHING OU SELEÇÃO DIRETA NO SPATIAL SCATTER
     if not selected_ids:
         if selectedData is not None and isinstance(selectedData, dict):
             pts = selectedData.get('points', [])
