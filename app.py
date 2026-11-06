@@ -449,7 +449,7 @@ app.layout = html.Div([
                         dbc.Card([
                             dbc.CardHeader("Análise Auxiliar Temporal (Boxplot)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
                             dbc.CardBody([
-                                dcc.Graph(id='dim-reduction-aux-graph', style={'height': '500px'})
+                                dcc.Graph(id='dim-reduction-aux-graph', style={'height': '460px'})
                             ])
                         ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
                     ], width=12, lg=5),
@@ -604,7 +604,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         template="plotly_white"
     )
 
-    # 2. Heatmap de Importância Correto (Mostrando todas as features e ajustando dtick no Eixo Y)
+    # 2. Heatmap de Importância Correto
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
@@ -820,7 +820,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 selectdirection='any'
             )
 
-    # 4. Boxplot Auxiliar
+    # 4. Boxplot Auxiliar (Altura Ajustada para 460px)
     fig_dim_aux = go.Figure()
     if not df_d6.empty and 'tsne_dim_1' in df_d6.columns:
         df_aux_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
