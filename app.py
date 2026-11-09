@@ -386,11 +386,9 @@ app.layout = html.Div([
             # ÁREA DE CONTEÚDO PRINCIPAL COM NAVEGAÇÃO EM ABAS
             dbc.Col([
                 dbc.Tabs([
-                    # ==========================================
                     # ABA 1: EXPLICABILIDADE TEMPORAL (XAI)
-                    # ==========================================
                     dbc.Tab(
-                        label="💡 Explicabilidade Temporal",
+                        label="Explicabilidade Temporal",
                         tab_id="tab-explicabilidade",
                         children=[
                             html.Div([
@@ -499,11 +497,9 @@ app.layout = html.Div([
                         ]
                     ),
 
-                    # ==========================================
                     # ABA 2: VALIDAÇÃO E DESEMPENHO DO MODELO
-                    # ==========================================
                     dbc.Tab(
-                        label="📊 Validação e Desempenho do Modelo",
+                        label="Validação e Desempenho do Modelo",
                         tab_id="tab-validacao",
                         children=[
                             html.Div([
