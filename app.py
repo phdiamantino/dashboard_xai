@@ -10,6 +10,7 @@ import plotly.express as px
 import pandas as pd
 import numpy as np
 from sklearn.decomposition import PCA
+from sklearn.metrics import confusion_matrix, precision_recall_fscore_support, roc_auc_score
 import dash_bootstrap_components as dbc
 
 # ==========================================
@@ -257,7 +258,7 @@ server = app.server
 
 app.layout = html.Div([
     dbc.NavbarSimple(
-        brand="Dashboard Analítico XAI - Diagnóstico Temporal por épocas",
+        brand="Dashboard Analítico XAI - Diagnóstico Temporal por Épocas",
         color="dark",
         dark=True,
         fluid=True,
@@ -266,7 +267,7 @@ app.layout = html.Div([
 
     dbc.Container([
         dbc.Row([
-            # SIDEBAR DE FILTROS E SELEÇÕES
+            # SIDEBAR DE FILTROS E SELEÇÕES (FIXA GLOBALMENTE)
             dbc.Col([
                 html.Div([
                     html.H5("Controles", style={'fontWeight': 'bold', 'color': '#1e293b', 'marginBottom': '15px', 'fontSize': '15px'}),
@@ -333,12 +334,12 @@ app.layout = html.Div([
                     html.H6("Controles 2D", style={'fontWeight': 'bold', 'color': '#1e293b', 'marginTop': '10px', 'marginBottom': '8px', 'fontSize': '13px'}),
                     
                     html.Div([
-                        html.Label("Época 2D:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        html.Label("Época 2D / Análise:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
                         dcc.Dropdown(id='dim-dropdown-epoca', options=[], clearable=False, style={'fontSize': '11px', 'marginBottom': '10px'})
                     ]),
 
                     html.Div([
-                        html.Label("Algoritmo:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
+                        html.Label("Algoritmo Espacial:", style={'fontSize': '11px', 'fontWeight': 'bold', 'color': '#334155'}),
                         dcc.Dropdown(
                             id='dim-dropdown-algo',
                             options=[{'label': 't-SNE', 'value': 'TSNE'}, {'label': 'PCA', 'value': 'PCA'}],
@@ -382,110 +383,170 @@ app.layout = html.Div([
                 })
             ], width=2),
 
-            # CONTEÚDO PRINCIPAL
+            # ÁREA DE CONTEÚDO PRINCIPAL COM NAVEGAÇÃO EM ABAS
             dbc.Col([
-                # 1. Sankey
-                dbc.Row([
-                    dbc.Col([
-                        dbc.Card([
-                            dbc.CardHeader("Fluxos Temporais de Transição de Classe (Sankey Reativo ao XAI)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
-                            dbc.CardBody([dcc.Graph(id='sankey-graph', style={'height': '530px'})])
-                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
-                    ], width=12)
-                ]),
+                dbc.Tabs([
+                    # ==========================================
+                    # ABA 1: EXPLICABILIDADE TEMPORAL (XAI)
+                    # ==========================================
+                    dbc.Tab(
+                        label="💡 Explicabilidade Temporal",
+                        tab_id="tab-explicabilidade",
+                        children=[
+                            html.Div([
+                                # 1. Sankey
+                                dbc.Row([
+                                    dbc.Col([
+                                        dbc.Card([
+                                            dbc.CardHeader("Fluxos Temporais de Transição de Classe (Sankey Reativo ao XAI)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                                            dbc.CardBody([dcc.Graph(id='sankey-graph', style={'height': '530px'})])
+                                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                                    ], width=12)
+                                ]),
 
-                # 2. Performance e Heatmap
-                dbc.Row([
-                    dbc.Col([
-                        dbc.Card([
-                            dbc.CardHeader("Evolução do Modelo: Performance & Estabilidade XAI", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
-                            dbc.CardBody([dcc.Graph(id='metrics-stability-combined-graph')])
-                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
-                    ], width=12, lg=6),
+                                # 2. Heatmap e Estabilidade XAI
+                                dbc.Row([
+                                    dbc.Col([
+                                        dbc.Card([
+                                            dbc.CardHeader("Resumo Global / Heatmap de Importância Temporal", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                                            dbc.CardBody([dcc.Graph(id='heatmap-graph', style={'height': '500px'})])
+                                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                                    ], width=12, lg=7),
 
-                    dbc.Col([
-                        dbc.Card([
-                            dbc.CardHeader("Resumo Global / Heatmap de Importância Temporal", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
-                            dbc.CardBody([dcc.Graph(id='heatmap-graph', style={'height': '550px'})])
-                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
-                    ], width=12, lg=6),
-                ]),
+                                    dbc.Col([
+                                        dbc.Card([
+                                            dbc.CardHeader("Estabilidade das Explicações (XAI)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                                            dbc.CardBody([dcc.Graph(id='stability-graph', style={'height': '500px'})])
+                                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                                    ], width=12, lg=5),
+                                ]),
 
-                # 3. Redução de Dimensionalidade + Boxplot Temporal
-                dbc.Row([
-                    dbc.Col([
-                        dbc.Card([
-                            dbc.CardHeader([
-                                html.Span("Redução de Dimensionalidade Principal (t-SNE / PCA Espacial)"),
-                                dbc.Badge(
-                                    id="badge-limpar-sankey",
-                                    color="danger",
-                                    className="ms-2",
-                                    style={
-                                        'cursor': 'pointer',
-                                        'fontSize': '11px',
-                                        'padding': '5px 9px',
-                                        'borderRadius': '12px',
-                                        'boxShadow': '0 2px 4px rgba(0,0,0,0.1)',
-                                        'display': 'none'
-                                    }
-                                )
-                            ], className="d-flex justify-content-between align-items-center", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
-                            dbc.CardBody([
-                                dcc.Graph(
-                                    id='dim-scatter-graph',
-                                    style={'height': '460px'},
-                                    config={
-                                        'modeBarButtonsToAdd': ['select2d', 'lasso2d'],
-                                        'displayModeBar': True,
-                                        'scrollZoom': True
-                                    }
-                                )
-                            ])
-                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
-                    ], width=12, lg=7),
+                                # 3. Espaço 2D + Boxplot Temporal
+                                dbc.Row([
+                                    dbc.Col([
+                                        dbc.Card([
+                                            dbc.CardHeader([
+                                                html.Span("Redução de Dimensionalidade Principal (t-SNE / PCA Espacial)"),
+                                                dbc.Badge(
+                                                    id="badge-limpar-sankey",
+                                                    color="danger",
+                                                    className="ms-2",
+                                                    style={
+                                                        'cursor': 'pointer',
+                                                        'fontSize': '11px',
+                                                        'padding': '5px 9px',
+                                                        'borderRadius': '12px',
+                                                        'boxShadow': '0 2px 4px rgba(0,0,0,0.1)',
+                                                        'display': 'none'
+                                                    }
+                                                )
+                                            ], className="d-flex justify-content-between align-items-center", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                                            dbc.CardBody([
+                                                dcc.Graph(
+                                                    id='dim-scatter-graph',
+                                                    style={'height': '460px'},
+                                                    config={
+                                                        'modeBarButtonsToAdd': ['select2d', 'lasso2d'],
+                                                        'displayModeBar': True,
+                                                        'scrollZoom': True
+                                                    }
+                                                )
+                                            ])
+                                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                                    ], width=12, lg=7),
 
-                    dbc.Col([
-                        dbc.Card([
-                            dbc.CardHeader("Análise Auxiliar Temporal (Boxplot)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
-                            dbc.CardBody([
-                                dcc.Graph(id='dim-reduction-aux-graph', style={'height': '460px'})
-                            ])
-                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
-                    ], width=12, lg=5),
-                ]),
+                                    dbc.Col([
+                                        dbc.Card([
+                                            dbc.CardHeader("Análise Auxiliar Temporal (Boxplot)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                                            dbc.CardBody([
+                                                dcc.Graph(id='dim-reduction-aux-graph', style={'height': '460px'})
+                                            ])
+                                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                                    ], width=12, lg=5),
+                                ]),
 
-                # 4. Tabela Auxiliar Abaixo
-                dbc.Row([
-                    dbc.Col([
-                        dbc.Card([
-                            dbc.CardHeader("Tabela Auxiliar de Instâncias (Seleção por Brushing / Caixa no Gráfico 2D / Sankey)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
-                            dbc.CardBody([
-                                dash_table.DataTable(
-                                    id='dim-tabela-instancias',
-                                    columns=[
-                                        {'name': 'Instância ID', 'id': 'instancia_id'},
-                                        {'name': 'Época', 'id': 'epoca'},
-                                        {'name': 'Método XAI', 'id': 'metodo_xai'},
-                                        {'name': 'Classe Real', 'id': 'classe_real'},
-                                        {'name': 'Classe Predita', 'id': 'classe_predita'},
-                                        {'name': 'Erro Predição', 'id': 'erro_predicao'},
-                                        {'name': 'Coord X', 'id': 'tsne_dim_1'},
-                                        {'name': 'Coord Y', 'id': 'tsne_dim_2'}
-                                    ],
-                                    data=[],
-                                    page_size=6,
-                                    row_selectable='multi',
-                                    selected_rows=[],
-                                    style_table={'overflowX': 'auto'},
-                                    style_cell={'textAlign': 'left', 'fontFamily': 'sans-serif', 'fontSize': '12px'},
-                                    style_header={'backgroundColor': '#f1f5f9', 'fontWeight': 'bold', 'color': '#1e293b'}
-                                )
-                            ])
-                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
-                    ], width=12)
-                ])
+                                # 4. Tabela Auxiliar de Instâncias
+                                dbc.Row([
+                                    dbc.Col([
+                                        dbc.Card([
+                                            dbc.CardHeader("Tabela Auxiliar de Instâncias (Seleção por Brushing / Caixa no Gráfico 2D / Sankey)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                                            dbc.CardBody([
+                                                dash_table.DataTable(
+                                                    id='dim-tabela-instancias',
+                                                    columns=[
+                                                        {'name': 'Instância ID', 'id': 'instancia_id'},
+                                                        {'name': 'Época', 'id': 'epoca'},
+                                                        {'name': 'Método XAI', 'id': 'metodo_xai'},
+                                                        {'name': 'Classe Real', 'id': 'classe_real'},
+                                                        {'name': 'Classe Predita', 'id': 'classe_predita'},
+                                                        {'name': 'Erro Predição', 'id': 'erro_predicao'},
+                                                        {'name': 'Coord X', 'id': 'tsne_dim_1'},
+                                                        {'name': 'Coord Y', 'id': 'tsne_dim_2'}
+                                                    ],
+                                                    data=[],
+                                                    page_size=6,
+                                                    row_selectable='multi',
+                                                    selected_rows=[],
+                                                    style_table={'overflowX': 'auto'},
+                                                    style_cell={'textAlign': 'left', 'fontFamily': 'sans-serif', 'fontSize': '12px'},
+                                                    style_header={'backgroundColor': '#f1f5f9', 'fontWeight': 'bold', 'color': '#1e293b'}
+                                                )
+                                            ])
+                                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                                    ], width=12)
+                                ])
+                            ], style={'paddingTop': '15px'})
+                        ]
+                    ),
 
+                    # ==========================================
+                    # ABA 2: VALIDAÇÃO E DESEMPENHO DO MODELO
+                    # ==========================================
+                    dbc.Tab(
+                        label="📊 Validação e Desempenho do Modelo",
+                        tab_id="tab-validacao",
+                        children=[
+                            html.Div([
+                                # 1. Performance (Acurácia & Loss)
+                                dbc.Row([
+                                    dbc.Col([
+                                        dbc.Card([
+                                            dbc.CardHeader("Evolução da Performance do Modelo (Acurácia & Loss)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                                            dbc.CardBody([dcc.Graph(id='performance-graph', style={'height': '380px'})])
+                                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                                    ], width=12)
+                                ]),
+
+                                # 2. Matriz de Confusão & Métricas de Classificação Por Época
+                                dbc.Row([
+                                    dbc.Col([
+                                        dbc.Card([
+                                            dbc.CardHeader("Matriz de Confusão (Época Selecionada)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                                            dbc.CardBody([dcc.Graph(id='confusion-matrix-graph', style={'height': '360px'})])
+                                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                                    ], width=12, lg=6),
+
+                                    dbc.Col([
+                                        dbc.Card([
+                                            dbc.CardHeader("Métricas de Classificação (Precision, Recall, F1 & AUC)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                                            dbc.CardBody([dcc.Graph(id='class-metrics-graph', style={'height': '360px'})])
+                                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                                    ], width=12, lg=6),
+                                ]),
+
+                                # 3. Distribuição dos Erros de Predição
+                                dbc.Row([
+                                    dbc.Col([
+                                        dbc.Card([
+                                            dbc.CardHeader("Distribuição dos Erros de Predição Por Classe (Análise de Dificuldade)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                                            dbc.CardBody([dcc.Graph(id='error-distribution-graph', style={'height': '380px'})])
+                                        ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
+                                    ], width=12)
+                                ])
+                            ], style={'paddingTop': '15px'})
+                        ]
+                    )
+                ], id="tabs-main", active_tab="tab-explicabilidade")
             ], width=10)
         ])
     ], fluid=True, style={'backgroundColor': '#f4f7f9', 'padding': '20px', 'minHeight': '100vh'})
@@ -534,13 +595,17 @@ def update_options(dataset_sel):
     return options_metodo, val_metodo, opt_epocas, val_epoca, min_ep, max_ep, marks_ep, [min_ep, max_ep]
 
 
-# CALLBACK PRINCIPAL
+# CALLBACK PRINCIPAL DAS GRAFICOS
 @app.callback(
-    [Output('metrics-stability-combined-graph', 'figure'),
+    [Output('performance-graph', 'figure'),
+     Output('stability-graph', 'figure'),
      Output('heatmap-graph', 'figure'),
      Output('dim-scatter-graph', 'figure'),
      Output('dim-reduction-aux-graph', 'figure'),
      Output('sankey-graph', 'figure'),
+     Output('confusion-matrix-graph', 'figure'),
+     Output('class-metrics-graph', 'figure'),
+     Output('error-distribution-graph', 'figure'),
      Output('badge-limpar-sankey', 'children'),
      Output('badge-limpar-sankey', 'style')],
     [Input('dropdown-dataset', 'value'),
@@ -570,42 +635,59 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
     ctx = callback_context
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
 
-    # OTIMIZAÇÃO: RESET IMEDIATO AO CLICAR NO BOTÃO X DO BADGE
     if triggered_id == 'badge-limpar-sankey':
         clickDataSankey = None
 
-    # 1. Performance + Estabilidade XAI
-    fig_combined = go.Figure()
+    # ----------------------------------------------------
+    # 1. GRAPH 1: PERFORMANCE DO MODELO (Acurácia x Loss)
+    # ----------------------------------------------------
+    fig_perf = go.Figure()
     if not df_d2.empty:
         acc_col = 'accuracy' if 'accuracy' in df_d2.columns else (df_d2.columns[1] if len(df_d2.columns) > 1 else None)
         loss_col = 'loss_validacao' if 'loss_validacao' in df_d2.columns else None
         
         if acc_col and 'epoca' in df_d2.columns:
-            fig_combined.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2[acc_col], mode='lines+markers', name='Acurácia', line=dict(color='#2ca02c')))
+            fig_perf.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2[acc_col], mode='lines+markers', name='Acurácia Validação', line=dict(color='#059669', width=2.5)))
         if loss_col and 'epoca' in df_d2.columns:
-            fig_combined.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2[loss_col], mode='lines+markers', name='Loss Validação', yaxis='y2', line=dict(color='#d62728')))
+            fig_perf.add_trace(go.Scatter(x=df_d2['epoca'], y=df_d2[loss_col], mode='lines+markers', name='Loss Validação', yaxis='y2', line=dict(color='#dc2626', width=2.5)))
             
-        if not df_d5.empty and 'tipo_metrica' in df_d5.columns:
-            mask_metodo = df_d5['tipo_metrica'].astype(str).str.upper() == str(metodo_sel).upper()
-            mask_metrica = df_d5['metrica'].astype(str).str.lower() == str(metrica_est_sel).lower() if 'metrica' in df_d5.columns else True
-            df_s_sub = df_d5[mask_metodo & mask_metrica]
-            
-            if not df_s_sub.empty and 'epoca_destino' in df_s_sub.columns and 'valor_metrica' in df_s_sub.columns:
-                fig_combined.add_trace(go.Scatter(
-                    x=df_s_sub['epoca_destino'], y=df_s_sub['valor_metrica'],
-                    mode='lines+markers', name=f'Estabilidade ({metrica_est_sel})',
-                    line=dict(color='#1f77b4', dash='dash')
-                ))
-    fig_combined.update_layout(
-        title=f"Performance do Modelo & Estabilidade XAI ({metodo_sel})",
-        yaxis=dict(title="Acurácia / Estabilidade"),
-        yaxis2=dict(title="Loss", overlaying='y', side='right', showgrid=False),
-        margin=dict(t=30, b=30, l=40, r=40),
+    fig_perf.update_layout(
+        title=f"Desempenho Preditivo do Modelo - {label_ds}",
+        xaxis=dict(title="Época"),
+        yaxis=dict(title="Acurácia"),
+        yaxis2=dict(title="Loss (Perda)", overlaying='y', side='right', showgrid=False),
+        margin=dict(t=40, b=40, l=40, r=40),
         legend=dict(x=0.01, y=0.99, orientation='h'),
         template="plotly_white"
     )
 
-    # 2. Heatmap de Importância
+    # ----------------------------------------------------
+    # 2. GRAPH 2: ESTABILIDADE DAS EXPLICAÇÕES (XAI)
+    # ----------------------------------------------------
+    fig_stab = go.Figure()
+    if not df_d5.empty and 'tipo_metrica' in df_d5.columns:
+        mask_metodo = df_d5['tipo_metrica'].astype(str).str.upper() == str(metodo_sel).upper()
+        mask_metrica = df_d5['metrica'].astype(str).str.lower() == str(metrica_est_sel).lower() if 'metrica' in df_d5.columns else True
+        df_s_sub = df_d5[mask_metodo & mask_metrica]
+        
+        if not df_s_sub.empty and 'epoca_destino' in df_s_sub.columns and 'valor_metrica' in df_s_sub.columns:
+            fig_stab.add_trace(go.Scatter(
+                x=df_s_sub['epoca_destino'], y=df_s_sub['valor_metrica'],
+                mode='lines+markers', name=f'Estabilidade ({metrica_est_sel.upper()})',
+                line=dict(color='#2563eb', width=2.5, dash='solid')
+            ))
+    fig_stab.update_layout(
+        title=f"Consistência Temporal das Explicações ({metodo_sel} - {metrica_est_sel.upper()})",
+        xaxis=dict(title="Época"),
+        yaxis=dict(title=f"Índice de Estabilidade ({metrica_est_sel})"),
+        margin=dict(t=40, b=40, l=40, r=40),
+        legend=dict(x=0.01, y=0.99, orientation='h'),
+        template="plotly_white"
+    )
+
+    # ----------------------------------------------------
+    # 3. HEATMAP DE IMPORTÂNCIA RANKED
+    # ----------------------------------------------------
     fig_heat = go.Figure()
     if not df_d4.empty and 'metodo_xai' in df_d4.columns:
         df_h_sub = df_d4[df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()]
@@ -622,12 +704,10 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 num_features = len(piv)
 
                 custom_text = np.empty((piv.shape[0], piv.shape[1], 2), dtype=object)
-
                 cols_list = list(piv.columns)
                 for i_feat, feat_name in enumerate(piv.index):
                     for j_ep, ep_val in enumerate(cols_list):
                         rank_atual = int(df_ranks.loc[feat_name, ep_val])
-                        
                         if j_ep > 0:
                             ep_ant = cols_list[j_ep - 1]
                             rank_ant = int(df_ranks.loc[feat_name, ep_ant])
@@ -653,25 +733,20 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     hovertemplate=(
                         "<b>Época:</b> %{x}<br>"
                         "<b>Feature:</b> %{y}<br>"
-                        "<b>Valor da Métrica (XAI):</b> %{z:.4f}<br>"
+                        "<b>Valor XAI:</b> %{z:.4f}<br>"
                         "----------------------------------<br>"
-                        "<b>Ranking de Importância:</b> %{customdata[0]}<br>"
-                        "<b>Evolução do Ranking:</b> %{customdata[1]}"
-                        "<extra></extra>"
+                        "<b>Ranking:</b> %{customdata[0]}<br>"
+                        "<b>Evolução:</b> %{customdata[1]}<extra></extra>"
                     )
                 ))
                 fig_heat.update_layout(
-                    title=f"Heatmap de Importância (Ranked) ({metodo_sel})",
-                    margin=dict(t=30, b=30, l=150, r=20),
+                    title=f"Heatmap de Importância ({metodo_sel})",
+                    margin=dict(t=40, b=30, l=150, r=20),
                     template="plotly_white",
-                    yaxis=dict(
-                        dtick=1,
-                        automargin=True,
-                        tickfont=dict(size=10)
-                    )
+                    yaxis=dict(dtick=1, automargin=True, tickfont=dict(size=10))
                 )
 
-    # DADOS DO SANKEY (AVALIA SELEÇÃO APENAS SE O BOTÃO DE LIMPAR NÃO FOI ACIONADO)
+    # DADOS SANKEY & SELEÇÕES DE INSTÂNCIAS
     instancias_selecionadas_tabela = []
     instancias_destaque_sankey = []
 
@@ -680,10 +755,10 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             if r_idx < len(table_data):
                 instancias_selecionadas_tabela.append(str(table_data[r_idx]['instancia_id']))
 
+    df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
+    df_sankey_processed, _, _ = processar_dados_sankey(df_d3_sankey, df_d2_sankey, dataset_sel)
+
     if triggered_id != 'badge-limpar-sankey' and not instancias_selecionadas_tabela and clickDataSankey and 'points' in clickDataSankey and len(clickDataSankey['points']) > 0:
-        df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
-        df_sankey_processed, _, _ = processar_dados_sankey(df_d3_sankey, df_d2_sankey, dataset_sel)
-        
         pt_s = clickDataSankey['points'][0]
         if 'pointNumber' in pt_s and not df_sankey_processed.empty:
             flow_idx = pt_s['pointNumber']
@@ -694,9 +769,6 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             if flow_idx < len(df_filtered_s):
                 lista_raw = df_filtered_s.iloc[flow_idx]['lista_instancias']
                 instancias_destaque_sankey = [str(x) for x in lista_raw]
-    else:
-        df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
-        df_sankey_processed, _, _ = processar_dados_sankey(df_d3_sankey, df_d2_sankey, dataset_sel)
 
     if not instancias_selecionadas_tabela and clickDataScatter and 'points' in clickDataScatter and len(clickDataScatter['points']) > 0:
         p_click = clickDataScatter['points'][0]
@@ -720,7 +792,9 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
         badge_children = []
         badge_style = {'display': 'none'}
 
-    # 3. Redução de Dimensionalidade (t-SNE / PCA)
+    # ----------------------------------------------------
+    # 4. REDUÇÃO DE DIMENSIONALIDADE (t-SNE / PCA)
+    # ----------------------------------------------------
     fig_tsne = go.Figure()
     if not df_d6.empty:
         epoca_alvo = epoca_proj_sel if epoca_proj_sel else (df_d6['epoca'].min() if 'epoca' in df_d6.columns else 1)
@@ -771,15 +845,6 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 )
             )
 
-            if cor_proj_sel != 'erro_predicao':
-                fig_tsne.update_layout(
-                    coloraxis_colorbar=dict(
-                        tickvals=[0, 1],
-                        ticktext=['0', '1'],
-                        title=cor_proj_sel
-                    )
-                )
-
             if instancias_destaque_sankey and triggered_id != 'badge-limpar-sankey':
                 df_sankey_pts = df_sub[df_sub['instancia_id'].isin(instancias_destaque_sankey)]
                 if not df_sankey_pts.empty:
@@ -817,11 +882,12 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 margin=dict(l=20, r=20, t=40, b=20),
                 template="plotly_white",
                 dragmode='select',
-                clickmode='event+select',
-                selectdirection='any'
+                clickmode='event+select'
             )
 
-    # 4. Boxplot Auxiliar (460px)
+    # ----------------------------------------------------
+    # 5. BOXPLOT AUXILIAR TEMPORAL
+    # ----------------------------------------------------
     fig_dim_aux = go.Figure()
     if not df_d6.empty and 'tsne_dim_1' in df_d6.columns:
         df_aux_sub = df_d6[df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()].copy()
@@ -838,7 +904,9 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 template="plotly_white"
             )
 
-    # 5. Fluxos Temporais (Sankey)
+    # ----------------------------------------------------
+    # 6. SANKEY TEMPORAL DE EXPLICAÇÕES
+    # ----------------------------------------------------
     fig_sankey = go.Figure()
     if not df_sankey_processed.empty:
         metodos_validos = df_sankey_processed['metodo_xai'].unique()
@@ -899,11 +967,11 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                         f"<b>Transição:</b> Época {row['epoca_origem']} &rarr; Época {row['epoca_destino']}<br>"
                         f"<b>Classe Predita:</b> {map_cls.get(row['classe_origem'])} &rarr; {map_cls.get(row['classe_destino'])}<br>"
                         f"<b>Classe Real Dominante:</b> {map_cls.get(row['classe_real_dominante'])}<br>"
-                        f"<b>Quantidade de Instâncias no Fluxo:</b> {row['qtd_instancias']}<br>"
-                        f"<b>Instância Exemplo:</b> ID #{row['exemplo_instancia']}<br>"
+                        f"<b>Qtd Instâncias:</b> {row['qtd_instancias']}<br>"
+                        f"<b>Exemplo ID:</b> #{row['exemplo_instancia']}<br>"
                         f"<b>Confiança Média:</b> {conf*100:.1f}%<br>"
-                        f"<b>Taxa de Erro Média:</b> {row['taxa_erro']*100:.1f}%<br>"
-                        f"<b>Importância Acumulada (XAI):</b> {row['soma_importancia']:.4f}"
+                        f"<b>Taxa Erro Média:</b> {row['taxa_erro']*100:.1f}%<br>"
+                        f"<b>Importância (XAI):</b> {row['soma_importancia']:.4f}"
                     )
                     hover_texts.append(hover_text)
 
@@ -913,12 +981,90 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 link=dict(source=sources, target=targets, value=values, color=link_colors, customdata=hover_texts, hovertemplate="%{customdata}<extra></extra>")
             )])
             fig_sankey.update_layout(
-                title_text=f"Transições Temporais de Explicações ({m_alvo}) - Dataset: {dataset_sel.upper()}",
+                title_text=f"Transições Temporais de Explicações ({m_alvo}) - {label_ds}",
                 font_size=12, margin=dict(l=20, r=20, t=50, b=20),
                 template="plotly_white"
             )
 
-    return fig_combined, fig_heat, fig_tsne, fig_dim_aux, fig_sankey, badge_children, badge_style
+    # ----------------------------------------------------
+    # 7. MATRIZ DE CONFUSÃO (ABA VALIDAÇÃO)
+    # ----------------------------------------------------
+    fig_cm = go.Figure()
+    epoca_alvo_val = epoca_proj_sel if epoca_proj_sel else 1
+    if not df_d6.empty:
+        df_ep_val = df_d6[df_d6['epoca'] == int(epoca_alvo_val)].copy()
+        if not df_ep_val.empty and 'classe_real' in df_ep_val.columns and 'classe_predita' in df_ep_val.columns:
+            y_true = df_ep_val['classe_real'].astype(int)
+            y_pred = df_ep_val['classe_predita'].astype(int)
+            cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+            
+            labels_cls = [map_cls.get(0, "Classe 0"), map_cls.get(1, "Classe 1")]
+            
+            fig_cm = px.imshow(
+                cm, text_auto=True,
+                x=labels_cls, y=labels_cls,
+                color_continuous_scale="Blues",
+                labels=dict(x="Classe Predita", y="Classe Real", color="Frequência")
+            )
+            fig_cm.update_layout(
+                title=f"Matriz de Confusão (Época {epoca_alvo_val})",
+                margin=dict(t=40, b=30, l=60, r=20),
+                template="plotly_white"
+            )
+
+    # ----------------------------------------------------
+    # 8. MÉTRICAS DE CLASSIFICAÇÃO (ABA VALIDAÇÃO)
+    # ----------------------------------------------------
+    fig_class_metrics = go.Figure()
+    if not df_d6.empty:
+        df_ep_val = df_d6[df_d6['epoca'] == int(epoca_alvo_val)].copy()
+        if not df_ep_val.empty and 'classe_real' in df_ep_val.columns and 'classe_predita' in df_ep_val.columns:
+            y_true = df_ep_val['classe_real'].astype(int)
+            y_pred = df_ep_val['classe_predita'].astype(int)
+            
+            p, r, f1, _ = precision_recall_fscore_support(y_true, y_pred, average=None, labels=[0, 1], zero_division=0)
+            try:
+                auc = roc_auc_score(y_true, y_pred)
+            except:
+                auc = 0.5
+
+            categories = ['Precision', 'Recall', 'F1-Score']
+            fig_class_metrics.add_trace(go.Bar(name=map_cls.get(0, 'Classe 0'), x=categories, y=[p[0], r[0], f1[0]], marker_color='#3b82f6'))
+            fig_class_metrics.add_trace(go.Bar(name=map_cls.get(1, 'Classe 1'), x=categories, y=[p[1], r[1], f1[1]], marker_color='#f97316'))
+            
+            fig_class_metrics.update_layout(
+                title=f"Métricas por Classe (Época {epoca_alvo_val}) | AUC-ROC: {auc:.3f}",
+                barmode='group',
+                yaxis=dict(range=[0, 1.05], title="Score"),
+                margin=dict(t=40, b=30, l=40, r=20),
+                template="plotly_white"
+            )
+
+    # ----------------------------------------------------
+    # 9. DISTRIBUIÇÃO DOS ERROS DE PREDIÇÃO (ABA VALIDAÇÃO)
+    # ----------------------------------------------------
+    fig_err_dist = go.Figure()
+    if not df_d6.empty and 'erro_predicao' in df_d6.columns:
+        df_d6_copy = df_d6.copy()
+        df_d6_copy['status_pred'] = df_d6_copy['erro_predicao'].map({0: 'Acerto', 1: 'Erro'})
+        
+        df_err_summary = df_d6_copy.groupby(['epoca', 'classe_real', 'status_pred']).size().reset_index(name='contagem')
+        df_err_summary['nome_classe'] = df_err_summary['classe_real'].map(map_cls)
+
+        fig_err_dist = px.bar(
+            df_err_summary, x='epoca', y='contagem', color='status_pred',
+            facet_col='nome_classe',
+            color_discrete_map={'Acerto': '#059669', 'Erro': '#dc2626'},
+            labels={'contagem': 'Qtd Instâncias', 'epoca': 'Época', 'status_pred': 'Resultado'}
+        )
+        fig_err_dist.update_layout(
+            title="Evolução da Distribuição de Erros x Acertos por Classe Real",
+            margin=dict(t=40, b=30, l=40, r=20),
+            template="plotly_white"
+        )
+
+    return (fig_perf, fig_stab, fig_heat, fig_tsne, fig_dim_aux, fig_sankey,
+            fig_cm, fig_class_metrics, fig_err_dist, badge_children, badge_style)
 
 
 # CALLBACK 2 INDEPENDENTE: ATUALIZAÇÃO DA TABELA (OTIMIZADO)
