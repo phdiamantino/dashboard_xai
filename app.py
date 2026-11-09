@@ -386,12 +386,11 @@ app.layout = html.Div([
             # ÁREA DE CONTEÚDO PRINCIPAL COM NAVEGAÇÃO EM ABAS
             dbc.Col([
                 dbc.Tabs([
-                    # ABA 1: EXPLICABILIDADE TEMPORAL (XAI) COM TOOLTIP NATIVO VIA SPAN NO LABEL
+                    # ==========================================
+                    # ABA 1: EXPLICABILIDADE TEMPORAL (XAI)
+                    # ==========================================
                     dbc.Tab(
-                        label=html.Span(
-                            "💡 Explicabilidade Temporal",
-                            title="Explicabilidade das decisões do modelo ao longo do treinamento"
-                        ),
+                        label="💡 Explicabilidade Temporal",
                         tab_id="tab-explicabilidade",
                         children=[
                             html.Div([
@@ -499,13 +498,12 @@ app.layout = html.Div([
                             ], style={'paddingTop': '15px'})
                         ]
                     ),
-                    
-                    # ABA 2: VALIDAÇÃO E DESEMPENHO DO MODELO COM TOOLTIP NATIVO VIA SPAN NO LABEL
+
+                    # ==========================================
+                    # ABA 2: VALIDAÇÃO E DESEMPENHO DO MODELO
+                    # ==========================================
                     dbc.Tab(
-                        label=html.Span(
-                            "📊 Validação e Desempenho do Modelo",
-                            title="Desempenho preditivo do modelo ao longo do treinamento"
-                        ),
+                        label="📊 Validação e Desempenho do Modelo",
                         tab_id="tab-validacao",
                         children=[
                             html.Div([
@@ -679,7 +677,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 line=dict(color='#2563eb', width=2.5, dash='solid')
             ))
     fig_stab.update_layout(
-        title=f"Consistência das Explicações ao longo do Tempo ({metodo_sel} - {metrica_est_sel.upper()})",
+        title=f"Consistência Temporal das Explicações ({metodo_sel} - {metrica_est_sel.upper()})",
         xaxis=dict(title="Época"),
         yaxis=dict(title=f"Índice de Estabilidade ({metrica_est_sel})"),
         margin=dict(t=40, b=40, l=40, r=40),
