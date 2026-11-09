@@ -386,13 +386,11 @@ app.layout = html.Div([
             # ÁREA DE CONTEÚDO PRINCIPAL COM NAVEGAÇÃO EM ABAS
             dbc.Col([
                 dbc.Tabs([
-                    # ABA 1: EXPLICABILIDADE TEMPORAL (XAI) COM MOUSEOVER/TOOLTIP
+                    # ABA 1: EXPLICABILIDADE TEMPORAL (XAI) COM TOOLTIP NATIVO VIA SPAN NO LABEL
                     dbc.Tab(
-                        label="💡 Explicabilidade Temporal",
-                        label_template=html.Span(
+                        label=html.Span(
                             "💡 Explicabilidade Temporal",
-                            title="Explicabilidade das decisões do modelo ao longo do treinamento",
-                            style={'cursor': 'pointer'}
+                            title="Explicabilidade das decisões do modelo ao longo do treinamento"
                         ),
                         tab_id="tab-explicabilidade",
                         children=[
@@ -502,13 +500,11 @@ app.layout = html.Div([
                         ]
                     ),
                     
-                    # ABA 2: VALIDAÇÃO E DESEMPENHO DO MODELO COM MOUSEOVER/TOOLTIP
+                    # ABA 2: VALIDAÇÃO E DESEMPENHO DO MODELO COM TOOLTIP NATIVO VIA SPAN NO LABEL
                     dbc.Tab(
-                        label="📊 Validação e Desempenho do Modelo",
-                        label_template=html.Span(
+                        label=html.Span(
                             "📊 Validação e Desempenho do Modelo",
-                            title="Desempenho preditivo do modelo ao longo do treinamento",
-                            style={'cursor': 'pointer'}
+                            title="Desempenho preditivo do modelo ao longo do treinamento"
                         ),
                         tab_id="tab-validacao",
                         children=[
