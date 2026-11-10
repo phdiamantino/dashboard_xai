@@ -388,10 +388,7 @@ app.layout = html.Div([
                 dbc.Tabs([
                     # ABA 1: EXPLICABILIDADE TEMPORAL (XAI)
                     dbc.Tab(
-                        label=html.Span(
-                            "💡 Explicabilidade Temporal",
-                            title="Explicabilidade das decisões do modelo ao longo do treinamento"
-                        ),
+                        label="💡 Explicabilidade Temporal",
                         tab_id="tab-explicabilidade",
                         children=[
                             html.Div([
@@ -502,10 +499,7 @@ app.layout = html.Div([
 
                     # ABA 2: VALIDAÇÃO E DESEMPENHO DO MODELO
                     dbc.Tab(
-                        label=html.Span(
-                            "📊 Validação e Desempenho do Modelo",
-                            title="Desempenho preditivo do modelo ao longo do treinamento"
-                        ),
+                        label="📊 Validação e Desempenho do Modelo",
                         tab_id="tab-validacao",
                         children=[
                             html.Div([
