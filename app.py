@@ -424,7 +424,7 @@ app.layout = html.Div([
                                     dbc.Col([
                                         dbc.Card([
                                             dbc.CardHeader([
-                                                html.Span("Redução de Dimensionalidade Principal (t-SNE / PCA Espacial)"),
+                                                html.Span("Redução de Dimensionalidade 2D (t-SNE / PCA)"),
                                                 dbc.Badge(
                                                     id="badge-limpar-sankey",
                                                     color="danger",
@@ -467,7 +467,7 @@ app.layout = html.Div([
                                 dbc.Row([
                                     dbc.Col([
                                         dbc.Card([
-                                            dbc.CardHeader("Tabela Auxiliar de Instâncias (Seleção por Brushing / Caixa no Gráfico 2D / Sankey)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                                            dbc.CardHeader("Tabela Auxiliar de Instâncias (Seleção por Brushing) ", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
                                             dbc.CardBody([
                                                 dash_table.DataTable(
                                                     id='dim-tabela-instancias',
@@ -534,7 +534,7 @@ app.layout = html.Div([
                                 dbc.Row([
                                     dbc.Col([
                                         dbc.Card([
-                                            dbc.CardHeader("Distribuição dos Erros de Predição Por Classe (Análise de Dificuldade)", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
+                                            dbc.CardHeader("Distribuição dos Erros de Predição Por Classe", style={'backgroundColor': '#f8fafc', 'fontWeight': 'bold', 'color': '#1e293b'}),
                                             dbc.CardBody([dcc.Graph(id='error-distribution-graph', style={'height': '380px'})])
                                         ], className="shadow-sm mb-4", style={'borderRadius': '8px', 'border': '1px solid #e2e8f0'})
                                     ], width=12)
