@@ -388,7 +388,10 @@ app.layout = html.Div([
                 dbc.Tabs([
                     # ABA 1: EXPLICABILIDADE TEMPORAL (XAI)
                     dbc.Tab(
-                        label="Explicabilidade Temporal",
+                        label=html.Span(
+                            "💡 Explicabilidade Temporal",
+                            title="Explicabilidade das decisões do modelo ao longo do treinamento"
+                        ),
                         tab_id="tab-explicabilidade",
                         children=[
                             html.Div([
@@ -499,7 +502,10 @@ app.layout = html.Div([
 
                     # ABA 2: VALIDAÇÃO E DESEMPENHO DO MODELO
                     dbc.Tab(
-                        label="Validação e Desempenho do Modelo",
+                        label=html.Span(
+                            "📊 Validação e Desempenho do Modelo",
+                            title="Desempenho preditivo do modelo ao longo do treinamento"
+                        ),
                         tab_id="tab-validacao",
                         children=[
                             html.Div([
@@ -874,7 +880,8 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
 
             fig_tsne.update_layout(
                 title=f"Espaço 2D ({algo_sel}) - Época {epoca_alvo} ({metodo_sel}) - {label_ds}",
-                xaxis_title=f"{algo_sel} Dim 1", yaxis_title=f"{algo_sel} Dim 2",
+                xaxis=dict(showticklabels=False, title=""),
+                yaxis=dict(showticklabels=False, title=""),
                 margin=dict(l=20, r=20, t=40, b=20),
                 template="plotly_white",
                 dragmode='select',
