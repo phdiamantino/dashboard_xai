@@ -591,7 +591,7 @@ def update_options(dataset_sel):
     return options_metodo, val_metodo, opt_epocas, val_epoca, min_ep, max_ep, marks_ep, [min_ep, max_ep]
 
 
-# CALLBACK PRINCIPAL DAS GRAFICOS
+# CALLBACK PRINCIPAL DOS GRÁFICOS
 @app.callback(
     [Output('performance-graph', 'figure'),
      Output('stability-graph', 'figure'),
@@ -615,11 +615,12 @@ def update_options(dataset_sel):
      Input('dim-toggle-trajetoria', 'value'),
      Input('dim-scatter-graph', 'clickData'),
      Input('sankey-graph', 'clickData'),
+     Input('dim-reduction-aux-graph', 'clickData'),
      Input('dim-tabela-instancias', 'selected_rows'),
      Input('badge-limpar-sankey', 'n_clicks')],
     [State('dim-tabela-instancias', 'data')]
 )
-def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, epocas_sel, epoca_proj_sel, algo_sel, cor_proj_sel, trajetoria_sel, clickDataScatter, clickDataSankey, selected_rows_table, btn_badge_clicks, table_data):
+def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, epocas_sel, epoca_proj_sel, algo_sel, cor_proj_sel, trajetoria_sel, clickDataScatter, clickDataSankey, clickDataBoxplot, selected_rows_table, btn_badge_clicks, table_data):
     df_d2 = carregar_csv_seguro("metricas_epocas", dataset_sel)
     df_d4 = carregar_csv_seguro("resumo_explicacoes", dataset_sel)
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
@@ -766,10 +767,17 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                 lista_raw = df_filtered_s.iloc[flow_idx]['lista_instancias']
                 instancias_destaque_sankey = [str(x) for x in lista_raw]
 
+    # CAPTURA SELEÇÃO VIA CLIQUE NO SPATIAL SCATTER
     if not instancias_selecionadas_tabela and clickDataScatter and 'points' in clickDataScatter and len(clickDataScatter['points']) > 0:
         p_click = clickDataScatter['points'][0]
         if 'customdata' in p_click and len(p_click['customdata']) > 0:
             instancias_selecionadas_tabela.append(str(p_click['customdata'][0]))
+
+    # CAPTURA SELEÇÃO VIA CLIQUE NO BOXPLOT (OUTLIER / PONTO)
+    if not instancias_selecionadas_tabela and clickDataBoxplot and 'points' in clickDataBoxplot and len(clickDataBoxplot['points']) > 0:
+        p_box = clickDataBoxplot['points'][0]
+        if 'customdata' in p_box and len(p_box['customdata']) > 0:
+            instancias_selecionadas_tabela.append(str(p_box['customdata'][0]))
 
     if instancias_destaque_sankey and triggered_id != 'badge-limpar-sankey':
         badge_children = [
@@ -829,6 +837,14 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
                     color_continuous_scale=COLORSCALE_BLUES_20,
                     custom_data=['instancia_id', 'classe_real', 'classe_predita', 'erro_predicao']
                 )
+                # AJUSTE SOLICITADO: CORRIGE A BARRA DE CORES PARA EXIBIR APENAS 0 E 1
+                fig_tsne.update_coloraxes(
+                    colorbar=dict(
+                        tickvals=[0, 1],
+                        ticktext=['0', '1'],
+                        len=0.8
+                    )
+                )
 
             fig_tsne.update_traces(
                 marker=dict(size=8, opacity=0.85, line=dict(width=0.5, color='#334155')),
@@ -883,7 +899,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             )
 
     # ----------------------------------------------------
-    # 5. BOXPLOT AUXILIAR TEMPORAL
+    # 5. BOXPLOT AUXILIAR TEMPORAL (COM ID NO HOVER / OUTLIER)
     # ----------------------------------------------------
     fig_dim_aux = go.Figure()
     if not df_d6.empty and 'tsne_dim_1' in df_d6.columns:
@@ -893,7 +909,12 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             fig_dim_aux = go.Figure(data=go.Box(
                 x=df_aux_sub['epoca'], y=df_aux_sub['tsne_dim_1'],
                 customdata=df_aux_sub[['instancia_id']],
-                name="Dim 1 (t-SNE)", marker_color='#6366f1', boxpoints='outliers'
+                name="Dim 1 (t-SNE)", marker_color='#6366f1', boxpoints='outliers',
+                hovertemplate=(
+                    "<b>Instância ID:</b> #%{customdata[0]}<br>"
+                    "<b>Época:</b> %{x}<br>"
+                    "<b>t-SNE Dim 1:</b> %{y:.4f}<extra></extra>"
+                )
             ))
             fig_dim_aux.update_layout(
                 title="Dispersão Temporal (t-SNE Dim 1)",
@@ -1064,12 +1085,13 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
             fig_cm, fig_class_metrics, fig_err_dist, badge_children, badge_style)
 
 
-# CALLBACK 2 INDEPENDENTE: ATUALIZAÇÃO DA TABELA (OTIMIZADO)
+# CALLBACK 2 INDEPENDENTE: ATUALIZAÇÃO DA TABELA (OTIMIZADO COM SUPORTE AO BOXPLOT)
 @app.callback(
     Output('dim-tabela-instancias', 'data'),
     [Input('dim-scatter-graph', 'selectedData'),
      Input('dim-scatter-graph', 'clickData'),
      Input('sankey-graph', 'clickData'),
+     Input('dim-reduction-aux-graph', 'clickData'),
      Input('dropdown-dataset', 'value'),
      Input('dropdown-metodo', 'value'),
      Input('dim-dropdown-epoca', 'value'),
@@ -1077,7 +1099,7 @@ def update_all_graphs(dataset_sel, metodo_sel, metrica_est_sel, cor_sankey_sel, 
      Input('slider-epocas', 'value'),
      Input('badge-limpar-sankey', 'n_clicks')]
 )
-def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey, dataset_sel, metodo_sel, epoca_proj_sel, algo_sel, epocas_sel, btn_badge_clicks):
+def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey, clickDataBoxplot, dataset_sel, metodo_sel, epoca_proj_sel, algo_sel, epocas_sel, btn_badge_clicks):
     df_d6 = carregar_csv_seguro("projecao_tsne_epocas", dataset_sel)
     df_d3 = carregar_csv_seguro("explicacoes_instancias", dataset_sel)
     if df_d6.empty:
@@ -1144,10 +1166,16 @@ def update_table_from_selection(selectedData, clickDataScatter, clickDataSankey,
             else:
                 selected_ids = []
 
-    elif not selected_ids and clickDataScatter and isinstance(clickDataScatter, dict) and 'points' in clickDataScatter and len(clickDataScatter['points']) > 0:
+    if not selected_ids and clickDataScatter and isinstance(clickDataScatter, dict) and 'points' in clickDataScatter and len(clickDataScatter['points']) > 0:
         p_click = clickDataScatter['points'][0]
         if 'customdata' in p_click and isinstance(p_click['customdata'], list) and len(p_click['customdata']) > 0:
             selected_ids = [str(p_click['customdata'][0])]
+
+    # SELEÇÃO VIA BOXPLOT (OUTLIERS)
+    if not selected_ids and clickDataBoxplot and isinstance(clickDataBoxplot, dict) and 'points' in clickDataBoxplot and len(clickDataBoxplot['points']) > 0:
+        p_box = clickDataBoxplot['points'][0]
+        if 'customdata' in p_box and isinstance(p_box['customdata'], list) and len(p_box['customdata']) > 0:
+            selected_ids = [str(p_box['customdata'][0])]
 
     if len(selected_ids) > 0:
         df_tabela = df_sub[df_sub['instancia_id'].isin(selected_ids)]
