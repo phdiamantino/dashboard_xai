@@ -381,7 +381,7 @@ app.layout = html.Div([
                         html.Div(
                             [
                                 html.H5(
-                                    'Controles',
+                                    'Seleções e Filtros',
                                     style={
                                         'fontWeight': 'bold',
                                         'color': '#1e293b',
