@@ -1845,7 +1845,7 @@ def update_all_graphs(
       )
   fig_stab.update_layout(
       title=(
-          'Consistência Temporal das Explicações'
+          'Preservação do ranking de importância'
           f' ({metodo_sel} - {metrica_est_sel.upper()})'
       ),
       xaxis=dict(title='Época'),
