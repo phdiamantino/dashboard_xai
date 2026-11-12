@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from dash import Input, Output, State, callback_context, dcc, html, dash_table
+from dash import Input, Output, State, callback_context, dash_table, dcc, html
 from sklearn.decomposition import PCA
 from sklearn.metrics import (
     confusion_matrix,
@@ -67,7 +67,7 @@ COLORSCALE_BLUES_20 = [
 ]
 
 # ==========================================
-# 1. MAPEAMENTO E CARREGAMENTO DE DADOS
+# 1. MAPEAMENTO, NORMALIZAÇÃO E CARREGAMENTO
 # ==========================================
 MAPA_DATASET = {
     'breast_cancer': {
@@ -101,6 +101,37 @@ def Mapeamento_classes_dataset(dataset_name):
   return {0: 'Classe 0', 1: 'Classe 1'}
 
 
+def normalizar_coluna_por_grupo(
+    df, col_valor, cols_grupo=['metodo_xai', 'epoca']
+):
+  """Aplica normalização Min-Max [0, 1] dentro de cada método XAI e época."""
+  if df.empty or col_valor not in df.columns:
+    return df
+
+  df = df.copy()
+  grupos_validos = [c for c in cols_grupo if c in df.columns]
+
+  if not grupos_validos:
+    v_min = df[col_valor].min()
+    v_max = df[col_valor].max()
+    denom = (v_max - v_min) if (v_max - v_min) > 1e-12 else 1.0
+    df[col_valor] = (df[col_valor] - v_min) / denom
+    return df
+
+  def _minmax(s):
+    s_min = s.min()
+    s_max = s.max()
+    denom = s_max - s_min
+    if denom <= 1e-12:
+      return pd.Series(
+          np.where(s > 0, 1.0, 0.0), index=s.index
+      )
+    return (s - s_min) / denom
+
+  df[col_valor] = df.groupby(grupos_validos)[col_valor].transform(_minmax)
+  return df
+
+
 def carregar_csv_seguro(nome_base, dataset_sel):
   padroes = [f'**/{nome_base}_{dataset_sel}.csv', f'**/{nome_base}.csv']
   for padrao in padroes:
@@ -121,7 +152,6 @@ def carregar_csv_seguro(nome_base, dataset_sel):
               == dataset_sel.lower()
           ]
 
-        # Normalizar coluna de ID para string
         for col_id in ['instancia_id', 'instance_id', 'id', 'sample_id']:
           if col_id in df.columns:
             df['instancia_id'] = df[col_id].astype(str)
@@ -171,15 +201,21 @@ def carregar_dados_sankey(dataset_sel):
   return df_d3, df_d2
 
 
-def processar_dados_sankey(df_d3, df_d2, dataset_sel):
+def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
   if df_d3.empty or df_d2.empty:
     return pd.DataFrame(), [], pd.DataFrame()
 
+  df_d3 = df_d3.copy()
   if 'importancia_absoluta' not in df_d3.columns:
     if 'valor_atribuicao' in df_d3.columns:
       df_d3['importancia_absoluta'] = df_d3['valor_atribuicao'].abs()
     else:
       df_d3['importancia_absoluta'] = 1.0
+
+  if normalizar:
+    df_d3 = normalizar_coluna_por_grupo(
+        df_d3, 'importancia_absoluta', ['metodo_xai', 'epoca']
+    )
 
   if 'instancia_id' not in df_d3.columns:
     for col in ['instance_id', 'id', 'sample_id']:
@@ -203,6 +239,11 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel):
       .reset_index()
       .rename(columns={'importancia_absoluta': 'importancia_total'})
   )
+
+  if normalizar:
+    df_inst_summary = normalizar_coluna_por_grupo(
+        df_inst_summary, 'importancia_total', ['metodo_xai', 'epoca']
+    )
 
   df_inst_summary['epoca'] = (
       pd.to_numeric(df_inst_summary['epoca'], errors='coerce')
@@ -381,7 +422,7 @@ app.layout = html.Div([
                         html.Div(
                             [
                                 html.H5(
-                                    'Seleções e Filtros',
+                                    'Controles',
                                     style={
                                         'fontWeight': 'bold',
                                         'color': '#1e293b',
@@ -434,6 +475,35 @@ app.layout = html.Div([
                                     dcc.Dropdown(
                                         id='dropdown-metodo',
                                         options=[],
+                                        clearable=False,
+                                        style={
+                                            'fontSize': '11px',
+                                            'marginBottom': '12px',
+                                        },
+                                    ),
+                                ]),
+                                html.Div([
+                                    html.Label(
+                                        'Escala Métricas XAI:',
+                                        style={
+                                            'fontSize': '11px',
+                                            'fontWeight': 'bold',
+                                            'color': '#0f172a',
+                                        },
+                                    ),
+                                    dcc.Dropdown(
+                                        id='dropdown-normalizacao-xai',
+                                        options=[
+                                            {
+                                                'label': 'Normalizada [0 - 1]',
+                                                'value': 'NORM',
+                                            },
+                                            {
+                                                'label': 'Bruta (Original)',
+                                                'value': 'RAW',
+                                            },
+                                        ],
+                                        value='NORM',
                                         clearable=False,
                                         style={
                                             'fontSize': '11px',
@@ -1546,7 +1616,7 @@ def update_options(dataset_sel):
   )
 
 
-# CALLBACK CENTRAL DE ESTADO: GERENCIA SELEÇÕES E FILTRA CLASSE DO SANKEY ESTRITAMENTE
+# CALLBACK CENTRAL DE ESTADO
 @app.callback(
     [
         Output('store-instancias-selecionadas', 'data'),
@@ -1586,7 +1656,9 @@ def gerenciar_estado_selecao(
     table_data,
 ):
   ctx = callback_context
-  triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+  triggered_id = (
+      ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+  )
 
   if triggered_id in [
       'badge-limpar-sankey',
@@ -1620,7 +1692,7 @@ def gerenciar_estado_selecao(
       else:
         return [inst_id], inst_id
 
-  # 2. SELEÇÃO VIA SANKEY (FILTRO ADICIONAL DE VALIDAÇÃO DE CLASSE)
+  # 2. SELEÇÃO VIA SANKEY
   if (
       triggered_id == 'sankey-graph'
       and clickDataSankey
@@ -1631,7 +1703,7 @@ def gerenciar_estado_selecao(
     if 'pointNumber' in pt_s:
       df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
       df_sankey_proc, _, _ = processar_dados_sankey(
-          df_d3_sankey, df_d2_sankey, dataset_sel
+          df_d3_sankey, df_d2_sankey, dataset_sel, normalizar=True
       )
       if not df_sankey_proc.empty:
         m_alvo = (
@@ -1650,7 +1722,6 @@ def gerenciar_estado_selecao(
           row_flow = df_fil.iloc[pt_s['pointNumber']]
           ids_sankey = [str(x) for x in row_flow['lista_instancias']]
 
-          # VALIDAÇÃO DE CLASSE: Filtra somente instâncias cuja classe predita bate com o fluxo de origem
           df_d6 = carregar_csv_seguro('projecao_tsne_epocas', dataset_sel)
           if not df_d6.empty and 'classe_predita' in df_d6.columns:
             epoca_check = row_flow['epoca_origem']
@@ -1711,7 +1782,7 @@ def gerenciar_estado_selecao(
   return state_selected_ids or [], state_last_box
 
 
-# CALLBACK PRINCIPAL DOS GRÁFICOS (ALIMENTADO PELO STORE)
+# CALLBACK PRINCIPAL DOS GRÁFICOS (COM SUPORTE A NORMALIZAÇÃO XAI)
 @app.callback(
     [
         Output('performance-graph', 'figure'),
@@ -1729,6 +1800,7 @@ def gerenciar_estado_selecao(
     [
         Input('dropdown-dataset', 'value'),
         Input('dropdown-metodo', 'value'),
+        Input('dropdown-normalizacao-xai', 'value'),
         Input('dropdown-metrica-estabilidade', 'value'),
         Input('dropdown-cor-metrica', 'value'),
         Input('slider-epocas', 'value'),
@@ -1744,6 +1816,7 @@ def gerenciar_estado_selecao(
 def update_all_graphs(
     dataset_sel,
     metodo_sel,
+    norm_xai_sel,
     metrica_est_sel,
     cor_sankey_sel,
     epocas_sel,
@@ -1755,6 +1828,9 @@ def update_all_graphs(
     clickDataSankey,
     btn_badge_clicks,
 ):
+  is_norm = norm_xai_sel == 'NORM'
+  tag_escala = '[Norm. 0–1]' if is_norm else '[Bruto]'
+
   df_d2 = carregar_csv_seguro('metricas_epocas', dataset_sel)
   df_d4 = carregar_csv_seguro('resumo_explicacoes', dataset_sel)
   df_d6 = carregar_csv_seguro('projecao_tsne_epocas', dataset_sel)
@@ -1765,8 +1841,25 @@ def update_all_graphs(
   label_ds = MAPA_DATASET.get(dataset_sel, {}).get('label', dataset_sel.upper())
   map_cls = Mapeamento_classes_dataset(dataset_sel)
 
+  # Aplica normalização nos dados brutos das instâncias se ativado
+  if is_norm and not df_d3.empty:
+    if 'valor_atribuicao' in df_d3.columns:
+      df_d3['valor_atribuicao_abs'] = df_d3['valor_atribuicao'].abs()
+      df_d3 = normalizar_coluna_por_grupo(
+          df_d3, 'valor_atribuicao_abs', ['metodo_xai', 'epoca']
+      )
+      df_d3['valor_atribuicao'] = (
+          np.sign(df_d3['valor_atribuicao']) * df_d3['valor_atribuicao_abs']
+      )
+    if 'importancia_absoluta' in df_d3.columns:
+      df_d3 = normalizar_coluna_por_grupo(
+          df_d3, 'importancia_absoluta', ['metodo_xai', 'epoca']
+      )
+
   ctx = callback_context
-  triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+  triggered_id = (
+      ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+  )
 
   # ----------------------------------------------------
   # 1. GRAPH 1: PERFORMANCE DO MODELO
@@ -1827,7 +1920,21 @@ def update_all_graphs(
         if 'metrica' in df_d5.columns
         else True
     )
-    df_s_sub = df_d5[mask_metodo & mask_metrica]
+    df_s_sub = df_d5[mask_metodo & mask_metrica].copy()
+
+    # Normaliza MAD e Variância entre épocas/métodos se modo normalizado estiver ativo
+    if (
+        is_norm
+        and not df_s_sub.empty
+        and metrica_est_sel != 'spearman'
+        and 'valor_metrica' in df_s_sub.columns
+    ):
+      s_min = df_s_sub['valor_metrica'].min()
+      s_max = df_s_sub['valor_metrica'].max()
+      if (s_max - s_min) > 1e-12:
+        df_s_sub['valor_metrica'] = (df_s_sub['valor_metrica'] - s_min) / (
+            s_max - s_min
+        )
 
     if (
         not df_s_sub.empty
@@ -1845,30 +1952,37 @@ def update_all_graphs(
       )
   fig_stab.update_layout(
       title=(
-          'Preservação do ranking de importância'
-          f' ({metodo_sel} - {metrica_est_sel.upper()})'
+          'Consistência Temporal'
+          f' ({metodo_sel} - {metrica_est_sel.upper()}) {tag_escala}'
       ),
       xaxis=dict(title='Época'),
-      yaxis=dict(title=f'Índice de Estabilidade ({metrica_est_sel})'),
+      yaxis=dict(title=f'Índice ({metrica_est_sel})'),
       margin=dict(t=40, b=40, l=40, r=40),
       legend=dict(x=0.01, y=0.99, orientation='h'),
       template='plotly_white',
   )
 
   # ----------------------------------------------------
-  # 3. HEATMAP DE IMPORTÂNCIA RANKED
+  # 3. HEATMAP DE IMPORTÂNCIA RANKED (NORMALIZADO POR ÉPOCA/MÉTODO)
   # ----------------------------------------------------
   fig_heat = go.Figure()
   if not df_d4.empty and 'metodo_xai' in df_d4.columns:
     df_h_sub = df_d4[
         df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()
-    ]
+    ].copy()
     if not df_h_sub.empty:
       val_col = (
           'importancia_media'
           if 'importancia_media' in df_h_sub.columns
           else df_h_sub.columns[-1]
       )
+      df_h_sub[val_col] = df_h_sub[val_col].abs()
+
+      if is_norm:
+        df_h_sub = normalizar_coluna_por_grupo(
+            df_h_sub, val_col, ['metodo_xai', 'epoca']
+        )
+
       piv = df_h_sub.pivot_table(
           index='feature', columns='epoca', values=val_col, fill_value=0
       )
@@ -1902,23 +2016,27 @@ def update_all_graphs(
             custom_text[i_feat, j_ep, 0] = f'{rank_atual}º de {num_features}'
             custom_text[i_feat, j_ep, 1] = var_str
 
-        fig_heat = go.Figure(
-            data=go.Heatmap(
-                z=piv.values,
-                x=piv.columns,
-                y=piv.index,
-                customdata=custom_text,
-                colorscale=COLORSCALE_REDS_20,
-                hovertemplate=(
-                    '<b>Época:</b> %{x}<br><b>Feature:</b> %{y}<br><b>Valor'
-                    ' XAI:</b> %{z:.4f}<br>----------------------------------<br><b>Ranking:</b>'
-                    ' %{customdata[0]}<br><b>Evolução:</b>'
-                    ' %{customdata[1]}<extra></extra>'
-                ),
-            )
+        heatmap_kwargs = dict(
+            z=piv.values,
+            x=piv.columns,
+            y=piv.index,
+            customdata=custom_text,
+            colorscale=COLORSCALE_REDS_20,
+            hovertemplate=(
+                '<b>Época:</b> %{x}<br><b>Feature:</b> %{y}<br><b>Valor XAI'
+                f' {tag_escala}:</b>'
+                ' %{z:.4f}<br>----------------------------------<br><b>Ranking:</b>'
+                ' %{customdata[0]}<br><b>Evolução:</b>'
+                ' %{customdata[1]}<extra></extra>'
+            ),
         )
+        if is_norm:
+          heatmap_kwargs['zmin'] = 0.0
+          heatmap_kwargs['zmax'] = 1.0
+
+        fig_heat = go.Figure(data=go.Heatmap(**heatmap_kwargs))
         fig_heat.update_layout(
-            title=f'Heatmap de Importância ({metodo_sel})',
+            title=f'Heatmap de Importância ({metodo_sel}) {tag_escala}',
             margin=dict(t=40, b=30, l=150, r=20),
             template='plotly_white',
             yaxis=dict(dtick=1, automargin=True, tickfont=dict(size=10)),
@@ -1931,7 +2049,7 @@ def update_all_graphs(
 
   df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
   df_sankey_processed, _, _ = processar_dados_sankey(
-      df_d3_sankey, df_d2_sankey, dataset_sel
+      df_d3_sankey, df_d2_sankey, dataset_sel, normalizar=is_norm
   )
 
   if (
@@ -1962,10 +2080,12 @@ def update_all_graphs(
         lista_raw = row_flow['lista_instancias']
         instancias_destaque_sankey = [str(x) for x in lista_raw]
 
-        # Filtro de segurança de classe no destaque visual também
         if not df_d6.empty and 'classe_predita' in df_d6.columns:
           df_d6_ep = df_d6[
-              (df_d6['metodo_xai'].astype(str).str.upper() == str(m_alvo).upper())
+              (
+                  df_d6['metodo_xai'].astype(str).str.upper()
+                  == str(m_alvo).upper()
+              )
               & (df_d6['epoca'] == int(row_flow['epoca_origem']))
               & (df_d6['classe_predita'] == int(row_flow['classe_origem']))
           ]
@@ -2272,8 +2392,8 @@ def update_all_graphs(
               f' Instâncias:</b> {row["qtd_instancias"]}<br><b>Exemplo ID:</b>'
               f' #{row["exemplo_instancia"]}<br><b>Confiança Média:</b>'
               f' {conf*100:.1f}%<br><b>Taxa Erro Média:</b>'
-              f' {row["taxa_erro"]*100:.1f}%<br><b>Importância (XAI):</b>'
-              f' {row["soma_importancia"]:.4f}'
+              f' {row["taxa_erro"]*100:.1f}%<br><b>Importância Média XAI'
+              f' {tag_escala}:</b> {row["importancia_media"]:.4f}'
           )
           hover_texts.append(hover_text)
 
@@ -2361,7 +2481,7 @@ def update_all_graphs(
       )
       try:
         auc = roc_auc_score(y_true, y_pred)
-      except:
+      except Exception:
         auc = 0.5
 
       categories = ['Precision', 'Recall', 'F1-Score']
@@ -2444,7 +2564,7 @@ def update_all_graphs(
   )
 
 
-# CALLBACK TABELA: ATUALIZA AUTOMATICAMENTE BASEADO NO STORE
+# CALLBACK TABELA
 @app.callback(
     Output('dim-tabela-instancias', 'data'),
     [
