@@ -101,10 +101,8 @@ def Mapeamento_classes_dataset(dataset_name):
   return {0: 'Classe 0', 1: 'Classe 1'}
 
 
-def normalizar_coluna_por_grupo(
-    df, col_valor, cols_grupo=['metodo_xai', 'epoca']
-):
-  """Aplica normalização Min-Max [0, 1] dentro de cada método XAI e época."""
+def normalizar_coluna_por_grupo(df, col_valor, cols_grupo=['metodo_xai']):
+  """Aplica normalização Min-Max [0, 1] globalmente por método XAI através de todas as épocas."""
   if df.empty or col_valor not in df.columns:
     return df
 
@@ -123,9 +121,7 @@ def normalizar_coluna_por_grupo(
     s_max = s.max()
     denom = s_max - s_min
     if denom <= 1e-12:
-      return pd.Series(
-          np.where(s > 0, 1.0, 0.0), index=s.index
-      )
+      return pd.Series(np.where(s > 0, 1.0, 0.0), index=s.index)
     return (s - s_min) / denom
 
   df[col_valor] = df.groupby(grupos_validos)[col_valor].transform(_minmax)
@@ -214,7 +210,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
 
   if normalizar:
     df_d3 = normalizar_coluna_por_grupo(
-        df_d3, 'importancia_absoluta', ['metodo_xai', 'epoca']
+        df_d3, 'importancia_absoluta', ['metodo_xai']
     )
 
   if 'instancia_id' not in df_d3.columns:
@@ -242,7 +238,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
 
   if normalizar:
     df_inst_summary = normalizar_coluna_por_grupo(
-        df_inst_summary, 'importancia_total', ['metodo_xai', 'epoca']
+        df_inst_summary, 'importancia_total', ['metodo_xai']
     )
 
   df_inst_summary['epoca'] = (
@@ -475,35 +471,6 @@ app.layout = html.Div([
                                     dcc.Dropdown(
                                         id='dropdown-metodo',
                                         options=[],
-                                        clearable=False,
-                                        style={
-                                            'fontSize': '11px',
-                                            'marginBottom': '12px',
-                                        },
-                                    ),
-                                ]),
-                                html.Div([
-                                    html.Label(
-                                        'Escala Métricas XAI:',
-                                        style={
-                                            'fontSize': '11px',
-                                            'fontWeight': 'bold',
-                                            'color': '#0f172a',
-                                        },
-                                    ),
-                                    dcc.Dropdown(
-                                        id='dropdown-normalizacao-xai',
-                                        options=[
-                                            {
-                                                'label': 'Normalizada [0 - 1]',
-                                                'value': 'NORM',
-                                            },
-                                            {
-                                                'label': 'Bruta (Original)',
-                                                'value': 'RAW',
-                                            },
-                                        ],
-                                        value='NORM',
                                         clearable=False,
                                         style={
                                             'fontSize': '11px',
@@ -1782,7 +1749,7 @@ def gerenciar_estado_selecao(
   return state_selected_ids or [], state_last_box
 
 
-# CALLBACK PRINCIPAL DOS GRÁFICOS (COM SUPORTE A NORMALIZAÇÃO XAI)
+# CALLBACK PRINCIPAL DOS GRÁFICOS (ESCALA NORMALIZADA [0 - 1] FIXA ENTRE MÉTODOS)
 @app.callback(
     [
         Output('performance-graph', 'figure'),
@@ -1800,7 +1767,6 @@ def gerenciar_estado_selecao(
     [
         Input('dropdown-dataset', 'value'),
         Input('dropdown-metodo', 'value'),
-        Input('dropdown-normalizacao-xai', 'value'),
         Input('dropdown-metrica-estabilidade', 'value'),
         Input('dropdown-cor-metrica', 'value'),
         Input('slider-epocas', 'value'),
@@ -1816,7 +1782,6 @@ def gerenciar_estado_selecao(
 def update_all_graphs(
     dataset_sel,
     metodo_sel,
-    norm_xai_sel,
     metrica_est_sel,
     cor_sankey_sel,
     epocas_sel,
@@ -1828,8 +1793,7 @@ def update_all_graphs(
     clickDataSankey,
     btn_badge_clicks,
 ):
-  is_norm = norm_xai_sel == 'NORM'
-  tag_escala = '[Norm. 0–1]' if is_norm else '[Bruto]'
+  tag_escala = '[Norm. 0–1]'
 
   df_d2 = carregar_csv_seguro('metricas_epocas', dataset_sel)
   df_d4 = carregar_csv_seguro('resumo_explicacoes', dataset_sel)
@@ -1841,19 +1805,19 @@ def update_all_graphs(
   label_ds = MAPA_DATASET.get(dataset_sel, {}).get('label', dataset_sel.upper())
   map_cls = Mapeamento_classes_dataset(dataset_sel)
 
-  # Aplica normalização nos dados brutos das instâncias se ativado
-  if is_norm and not df_d3.empty:
+  # Aplica normalização global por método XAI (preservando a evolução temporal entre épocas)
+  if not df_d3.empty:
     if 'valor_atribuicao' in df_d3.columns:
       df_d3['valor_atribuicao_abs'] = df_d3['valor_atribuicao'].abs()
       df_d3 = normalizar_coluna_por_grupo(
-          df_d3, 'valor_atribuicao_abs', ['metodo_xai', 'epoca']
+          df_d3, 'valor_atribuicao_abs', ['metodo_xai']
       )
       df_d3['valor_atribuicao'] = (
           np.sign(df_d3['valor_atribuicao']) * df_d3['valor_atribuicao_abs']
       )
     if 'importancia_absoluta' in df_d3.columns:
       df_d3 = normalizar_coluna_por_grupo(
-          df_d3, 'importancia_absoluta', ['metodo_xai', 'epoca']
+          df_d3, 'importancia_absoluta', ['metodo_xai']
       )
 
   ctx = callback_context
@@ -1922,10 +1886,9 @@ def update_all_graphs(
     )
     df_s_sub = df_d5[mask_metodo & mask_metrica].copy()
 
-    # Normaliza MAD e Variância entre épocas/métodos se modo normalizado estiver ativo
+    # Normaliza MAD e Variância por método XAI
     if (
-        is_norm
-        and not df_s_sub.empty
+        not df_s_sub.empty
         and metrica_est_sel != 'spearman'
         and 'valor_metrica' in df_s_sub.columns
     ):
@@ -1963,26 +1926,24 @@ def update_all_graphs(
   )
 
   # ----------------------------------------------------
-  # 3. HEATMAP DE IMPORTÂNCIA RANKED (NORMALIZADO POR ÉPOCA/MÉTODO)
+  # 3. HEATMAP DE IMPORTÂNCIA RANKED (NORMALIZADO POR MÉTODO XAI)
   # ----------------------------------------------------
   fig_heat = go.Figure()
   if not df_d4.empty and 'metodo_xai' in df_d4.columns:
-    df_h_sub = df_d4[
-        df_d4['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()
+    df_h_all = df_d4.copy()
+    val_col = (
+        'importancia_media'
+        if 'importancia_media' in df_h_all.columns
+        else df_h_all.columns[-1]
+    )
+    df_h_all[val_col] = df_h_all[val_col].abs()
+    df_h_all = normalizar_coluna_por_grupo(df_h_all, val_col, ['metodo_xai'])
+
+    df_h_sub = df_h_all[
+        df_h_all['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()
     ].copy()
+
     if not df_h_sub.empty:
-      val_col = (
-          'importancia_media'
-          if 'importancia_media' in df_h_sub.columns
-          else df_h_sub.columns[-1]
-      )
-      df_h_sub[val_col] = df_h_sub[val_col].abs()
-
-      if is_norm:
-        df_h_sub = normalizar_coluna_por_grupo(
-            df_h_sub, val_col, ['metodo_xai', 'epoca']
-        )
-
       piv = df_h_sub.pivot_table(
           index='feature', columns='epoca', values=val_col, fill_value=0
       )
@@ -2016,27 +1977,26 @@ def update_all_graphs(
             custom_text[i_feat, j_ep, 0] = f'{rank_atual}º de {num_features}'
             custom_text[i_feat, j_ep, 1] = var_str
 
-        heatmap_kwargs = dict(
-            z=piv.values,
-            x=piv.columns,
-            y=piv.index,
-            customdata=custom_text,
-            colorscale=COLORSCALE_REDS_20,
-            hovertemplate=(
-                '<b>Época:</b> %{x}<br><b>Feature:</b> %{y}<br><b>Valor XAI'
-                f' {tag_escala}:</b>'
-                ' %{z:.4f}<br>----------------------------------<br><b>Ranking:</b>'
-                ' %{customdata[0]}<br><b>Evolução:</b>'
-                ' %{customdata[1]}<extra></extra>'
-            ),
+        fig_heat = go.Figure(
+            data=go.Heatmap(
+                z=piv.values,
+                x=piv.columns,
+                y=piv.index,
+                zmin=0.0,
+                zmax=1.0,
+                customdata=custom_text,
+                colorscale=COLORSCALE_REDS_20,
+                hovertemplate=(
+                    '<b>Época:</b> %{x}<br><b>Feature:</b> %{y}<br><b>Valor XAI'
+                    f':</b>'
+                    ' %{z:.4f}<br>----------------------------------<br><b>Ranking:</b>'
+                    ' %{customdata[0]}<br><b>Evolução:</b>'
+                    ' %{customdata[1]}<extra></extra>'
+                ),
+            )
         )
-        if is_norm:
-          heatmap_kwargs['zmin'] = 0.0
-          heatmap_kwargs['zmax'] = 1.0
-
-        fig_heat = go.Figure(data=go.Heatmap(**heatmap_kwargs))
         fig_heat.update_layout(
-            title=f'Heatmap de Importância ({metodo_sel}) {tag_escala}',
+            title=f'Heatmap de Importância ({metodo_sel})',
             margin=dict(t=40, b=30, l=150, r=20),
             template='plotly_white',
             yaxis=dict(dtick=1, automargin=True, tickfont=dict(size=10)),
@@ -2049,7 +2009,7 @@ def update_all_graphs(
 
   df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
   df_sankey_processed, _, _ = processar_dados_sankey(
-      df_d3_sankey, df_d2_sankey, dataset_sel, normalizar=is_norm
+      df_d3_sankey, df_d2_sankey, dataset_sel, normalizar=True
   )
 
   if (
@@ -2393,7 +2353,7 @@ def update_all_graphs(
               f' #{row["exemplo_instancia"]}<br><b>Confiança Média:</b>'
               f' {conf*100:.1f}%<br><b>Taxa Erro Média:</b>'
               f' {row["taxa_erro"]*100:.1f}%<br><b>Importância Média XAI'
-              f' {tag_escala}:</b> {row["importancia_media"]:.4f}'
+              f' :</b> {row["importancia_media"]:.4f}'
           )
           hover_texts.append(hover_text)
 
