@@ -67,6 +67,51 @@ COLORSCALE_BLUES_20 = [
 ]
 
 # ==========================================
+# CONSTANTES E MAPEAMENTO GLOBAL DE MÉTRICAS XAI
+# ==========================================
+CODIGO_MEDIA_GERAL = 'MEDIA_GERAL'
+LABEL_MEDIA_GERAL = 'Média Geral (4 Métodos)'
+
+METODOS_BASE_XAI = ['SHAP', 'LIME', 'IG', 'PFI']
+
+MAPA_METODOS_XAI = {
+    'SHAP': 'SHAP',
+    'LIME': 'LIME',
+    'IG': 'Integrated Gradients (IG)',
+    'PFI': 'Permutation Importance (PFI)',
+    CODIGO_MEDIA_GERAL: LABEL_MEDIA_GERAL,
+}
+
+CORES_METODOS_XAI = {
+    'SHAP': '#2563eb',
+    'LIME': '#16a34a',
+    'IG': '#9333ea',
+    'PFI': '#ea580c',
+    CODIGO_MEDIA_GERAL: '#0f172a',
+}
+
+
+def formatar_label_metodo(codigo_metodo):
+  codigo_str = str(codigo_metodo).strip()
+  return MAPA_METODOS_XAI.get(
+      codigo_str, MAPA_METODOS_XAI.get(codigo_str.upper(), codigo_str)
+  )
+
+
+def detectar_coluna_feature(df):
+  for col in [
+      'feature',
+      'atributo',
+      'variavel',
+      'nome_feature',
+      'feature_name',
+  ]:
+    if col in df.columns:
+      return col
+  return None
+
+
+# ==========================================
 # 1. MAPEAMENTO, NORMALIZAÇÃO E CARREGAMENTO
 # ==========================================
 MAPA_DATASET = {
@@ -126,6 +171,62 @@ def normalizar_coluna_por_grupo(df, col_valor, cols_grupo=['metodo_xai']):
 
   df[col_valor] = df.groupby(grupos_validos)[col_valor].transform(_minmax)
   return df
+
+
+def adicionar_metrica_media_geral(df_d3):
+  """Calcula e anexa a métrica sintética MEDIA_GERAL (média normalizada [0,1]
+
+  das 4 métricas XAI: SHAP, LIME, IG, PFI) por época, instância e feature.
+  """
+  if df_d3.empty or 'metodo_xai' not in df_d3.columns:
+    return df_d3
+
+  df_base = df_d3[df_d3['metodo_xai'] != CODIGO_MEDIA_GERAL].copy()
+  if df_base.empty:
+    return df_d3
+
+  if 'importancia_absoluta' not in df_base.columns:
+    if 'valor_atribuicao' in df_base.columns:
+      df_base['importancia_absoluta'] = pd.to_numeric(
+          df_base['valor_atribuicao'], errors='coerce'
+      ).abs()
+    elif 'importancia_media' in df_base.columns:
+      df_base['importancia_absoluta'] = pd.to_numeric(
+          df_base['importancia_media'], errors='coerce'
+      ).abs()
+    else:
+      df_base['importancia_absoluta'] = 1.0
+  else:
+    df_base['importancia_absoluta'] = pd.to_numeric(
+        df_base['importancia_absoluta'], errors='coerce'
+    ).fillna(0.0)
+
+  # Normaliza cada um dos 4 métodos em [0, 1] antes de tirar a média geral
+  df_norm = normalizar_coluna_por_grupo(
+      df_base, 'importancia_absoluta', ['metodo_xai']
+  )
+
+  col_feat = detectar_coluna_feature(df_norm)
+  chaves_grupo = [
+      c for c in ['epoca', 'instancia_id', col_feat] if c and c in df_norm.columns
+  ]
+  if not chaves_grupo:
+    return df_base
+
+  agg_dict = {'importancia_absoluta': 'mean'}
+  if 'valor_atribuicao' in df_norm.columns:
+    df_norm['valor_atribuicao'] = pd.to_numeric(
+        df_norm['valor_atribuicao'], errors='coerce'
+    ).fillna(0.0)
+    agg_dict['valor_atribuicao'] = 'mean'
+  for col_extra in ['classe_real', 'classe_predita', 'modelo_id', 'dataset_name']:
+    if col_extra in df_norm.columns:
+      agg_dict[col_extra] = 'first'
+
+  df_media = df_norm.groupby(chaves_grupo, as_index=False).agg(agg_dict)
+  df_media['metodo_xai'] = CODIGO_MEDIA_GERAL
+
+  return pd.concat([df_base, df_media], ignore_index=True)
 
 
 def carregar_csv_seguro(nome_base, dataset_sel):
@@ -193,6 +294,20 @@ def carregar_dados_sankey(dataset_sel):
       and (df_d2['modelo_id'] == modelo_alvo).any()
   ):
     df_d2 = df_d2[df_d2['modelo_id'] == modelo_alvo].copy()
+
+  if not df_d3.empty:
+    if 'instancia_id' not in df_d3.columns:
+      for col in ['instance_id', 'id', 'sample_id']:
+        if col in df_d3.columns:
+          df_d3['instancia_id'] = df_d3[col].astype(str)
+          break
+      if 'instancia_id' not in df_d3.columns:
+        df_d3['instancia_id'] = [str(i) for i in range(len(df_d3))]
+    else:
+      df_d3['instancia_id'] = df_d3['instancia_id'].astype(str)
+
+    # Incrementa a métrica de Média Geral das 4 métricas XAI
+    df_d3 = adicionar_metrica_media_geral(df_d3)
 
   return df_d3, df_d2
 
@@ -461,7 +576,7 @@ app.layout = html.Div([
                                 ]),
                                 html.Div([
                                     html.Label(
-                                        'Método XAI:',
+                                        'Método / Métrica XAI:',
                                         style={
                                             'fontSize': '11px',
                                             'fontWeight': 'bold',
@@ -470,7 +585,13 @@ app.layout = html.Div([
                                     ),
                                     dcc.Dropdown(
                                         id='dropdown-metodo',
-                                        options=[],
+                                        options=[
+                                            {
+                                                'label': LABEL_MEDIA_GERAL,
+                                                'value': CODIGO_MEDIA_GERAL,
+                                            }
+                                        ],
+                                        value=CODIGO_MEDIA_GERAL,
                                         clearable=False,
                                         style={
                                             'fontSize': '11px',
@@ -714,59 +835,29 @@ app.layout = html.Div([
                                                         [
                                                             dbc.Card(
                                                                 [
-                                                                    (
-                                                                        dbc.CardHeader(
-                                                                            'Fluxos'
-                                                                            ' Temporais'
-                                                                            ' de'
-                                                                            ' Transição'
-                                                                            ' de'
-                                                                            ' Classe'
-                                                                            ' (Sankey'
-                                                                            ' Reativo'
-                                                                            ' ao'
-                                                                            ' XAI)',
-                                                                            style={
-                                                                                'backgroundColor': (
-                                                                                    '#f8fafc'
-                                                                                ),
-                                                                                'fontWeight': (
-                                                                                    'bold'
-                                                                                ),
-                                                                                'color': (
-                                                                                    '#1e293b'
-                                                                                ),
-                                                                            },
-                                                                        )
+                                                                    dbc.CardHeader(
+                                                                        'Fluxos Temporais de Transição de Classe (Sankey Reativo ao XAI)',
+                                                                        style={
+                                                                            'backgroundColor': '#f8fafc',
+                                                                            'fontWeight': 'bold',
+                                                                            'color': '#1e293b',
+                                                                        },
                                                                     ),
                                                                     dbc.CardBody(
                                                                         [
                                                                             dcc.Graph(
-                                                                                id=(
-                                                                                    'sankey-graph'
-                                                                                ),
+                                                                                id='sankey-graph',
                                                                                 style={
-                                                                                    'height': (
-                                                                                        '530px'
-                                                                                    )
+                                                                                    'height': '530px'
                                                                                 },
                                                                             )
                                                                         ]
                                                                     ),
                                                                 ],
-                                                                className=(
-                                                                    'shadow-sm'
-                                                                    ' mb-4'
-                                                                ),
+                                                                className='shadow-sm mb-4',
                                                                 style={
-                                                                    'borderRadius': (
-                                                                        '8px'
-                                                                    ),
-                                                                    'border': (
-                                                                        '1px'
-                                                                        ' solid'
-                                                                        ' #e2e8f0'
-                                                                    ),
+                                                                    'borderRadius': '8px',
+                                                                    'border': '1px solid #e2e8f0',
                                                                 },
                                                             )
                                                         ],
@@ -779,56 +870,29 @@ app.layout = html.Div([
                                                         [
                                                             dbc.Card(
                                                                 [
-                                                                    (
-                                                                        dbc.CardHeader(
-                                                                            'Resumo'
-                                                                            ' Global'
-                                                                            ' /'
-                                                                            ' Heatmap'
-                                                                            ' de'
-                                                                            ' Importância'
-                                                                            ' Temporal',
-                                                                            style={
-                                                                                'backgroundColor': (
-                                                                                    '#f8fafc'
-                                                                                ),
-                                                                                'fontWeight': (
-                                                                                    'bold'
-                                                                                ),
-                                                                                'color': (
-                                                                                    '#1e293b'
-                                                                                ),
-                                                                            },
-                                                                        )
+                                                                    dbc.CardHeader(
+                                                                        'Resumo Global / Heatmap de Importância Temporal',
+                                                                        style={
+                                                                            'backgroundColor': '#f8fafc',
+                                                                            'fontWeight': 'bold',
+                                                                            'color': '#1e293b',
+                                                                        },
                                                                     ),
                                                                     dbc.CardBody(
                                                                         [
                                                                             dcc.Graph(
-                                                                                id=(
-                                                                                    'heatmap-graph'
-                                                                                ),
+                                                                                id='heatmap-graph',
                                                                                 style={
-                                                                                    'height': (
-                                                                                        '500px'
-                                                                                    )
+                                                                                    'height': '500px'
                                                                                 },
                                                                             )
                                                                         ]
                                                                     ),
                                                                 ],
-                                                                className=(
-                                                                    'shadow-sm'
-                                                                    ' mb-4'
-                                                                ),
+                                                                className='shadow-sm mb-4',
                                                                 style={
-                                                                    'borderRadius': (
-                                                                        '8px'
-                                                                    ),
-                                                                    'border': (
-                                                                        '1px'
-                                                                        ' solid'
-                                                                        ' #e2e8f0'
-                                                                    ),
+                                                                    'borderRadius': '8px',
+                                                                    'border': '1px solid #e2e8f0',
                                                                 },
                                                             )
                                                         ],
@@ -839,53 +903,29 @@ app.layout = html.Div([
                                                         [
                                                             dbc.Card(
                                                                 [
-                                                                    (
-                                                                        dbc.CardHeader(
-                                                                            'Estabilidade'
-                                                                            ' das'
-                                                                            ' Explicações'
-                                                                            ' (XAI)',
-                                                                            style={
-                                                                                'backgroundColor': (
-                                                                                    '#f8fafc'
-                                                                                ),
-                                                                                'fontWeight': (
-                                                                                    'bold'
-                                                                                ),
-                                                                                'color': (
-                                                                                    '#1e293b'
-                                                                                ),
-                                                                            },
-                                                                        )
+                                                                    dbc.CardHeader(
+                                                                        'Estabilidade das Explicações (XAI)',
+                                                                        style={
+                                                                            'backgroundColor': '#f8fafc',
+                                                                            'fontWeight': 'bold',
+                                                                            'color': '#1e293b',
+                                                                        },
                                                                     ),
                                                                     dbc.CardBody(
                                                                         [
                                                                             dcc.Graph(
-                                                                                id=(
-                                                                                    'stability-graph'
-                                                                                ),
+                                                                                id='stability-graph',
                                                                                 style={
-                                                                                    'height': (
-                                                                                        '500px'
-                                                                                    )
+                                                                                    'height': '500px'
                                                                                 },
                                                                             )
                                                                         ]
                                                                     ),
                                                                 ],
-                                                                className=(
-                                                                    'shadow-sm'
-                                                                    ' mb-4'
-                                                                ),
+                                                                className='shadow-sm mb-4',
                                                                 style={
-                                                                    'borderRadius': (
-                                                                        '8px'
-                                                                    ),
-                                                                    'border': (
-                                                                        '1px'
-                                                                        ' solid'
-                                                                        ' #e2e8f0'
-                                                                    ),
+                                                                    'borderRadius': '8px',
+                                                                    'border': '1px solid #e2e8f0',
                                                                 },
                                                             )
                                                         ],
@@ -899,123 +939,56 @@ app.layout = html.Div([
                                                         [
                                                             dbc.Card(
                                                                 [
-                                                                    (
-                                                                        dbc.CardHeader(
-                                                                            [
-                                                                                (
-                                                                                    html.Span(
-                                                                                        'Redução'
-                                                                                        ' de'
-                                                                                        ' Dimensionalidade'
-                                                                                        ' 2D'
-                                                                                        ' (t-SNE'
-                                                                                        ' /'
-                                                                                        ' PCA)'
-                                                                                    )
-                                                                                ),
-                                                                                (
-                                                                                    dbc.Badge(
-                                                                                        id=(
-                                                                                            'badge-limpar-sankey'
-                                                                                        ),
-                                                                                        color=(
-                                                                                            'danger'
-                                                                                        ),
-                                                                                        className=(
-                                                                                            'ms-2'
-                                                                                        ),
-                                                                                        style={
-                                                                                            'cursor': (
-                                                                                                'pointer'
-                                                                                            ),
-                                                                                            'fontSize': (
-                                                                                                '11px'
-                                                                                            ),
-                                                                                            'padding': (
-                                                                                                '5px'
-                                                                                                ' 9px'
-                                                                                            ),
-                                                                                            'borderRadius': (
-                                                                                                '12px'
-                                                                                            ),
-                                                                                            'boxShadow': (
-                                                                                                '0'
-                                                                                                ' 2px'
-                                                                                                ' 4px'
-                                                                                                ' rgba(0,0,0,0.1)'
-                                                                                            ),
-                                                                                            'display': (
-                                                                                                'none'
-                                                                                            ),
-                                                                                        },
-                                                                                    )
-                                                                                ),
-                                                                            ],
-                                                                            className=(
-                                                                                'd-flex'
-                                                                                ' justify-content-between'
-                                                                                ' align-items-center'
+                                                                    dbc.CardHeader(
+                                                                        [
+                                                                            html.Span(
+                                                                                'Redução de Dimensionalidade 2D (t-SNE / PCA)'
                                                                             ),
-                                                                            style={
-                                                                                'backgroundColor': (
-                                                                                    '#f8fafc'
-                                                                                ),
-                                                                                'fontWeight': (
-                                                                                    'bold'
-                                                                                ),
-                                                                                'color': (
-                                                                                    '#1e293b'
-                                                                                ),
-                                                                            },
-                                                                        )
+                                                                            dbc.Badge(
+                                                                                id='badge-limpar-sankey',
+                                                                                color='danger',
+                                                                                className='ms-2',
+                                                                                style={
+                                                                                    'cursor': 'pointer',
+                                                                                    'fontSize': '11px',
+                                                                                    'padding': '5px 9px',
+                                                                                    'borderRadius': '12px',
+                                                                                    'boxShadow': '0 2px 4px rgba(0,0,0,0.1)',
+                                                                                    'display': 'none',
+                                                                                },
+                                                                            ),
+                                                                        ],
+                                                                        className='d-flex justify-content-between align-items-center',
+                                                                        style={
+                                                                            'backgroundColor': '#f8fafc',
+                                                                            'fontWeight': 'bold',
+                                                                            'color': '#1e293b',
+                                                                        },
                                                                     ),
                                                                     dbc.CardBody(
                                                                         [
                                                                             dcc.Graph(
-                                                                                id=(
-                                                                                    'dim-scatter-graph'
-                                                                                ),
+                                                                                id='dim-scatter-graph',
                                                                                 style={
-                                                                                    'height': (
-                                                                                        '460px'
-                                                                                    )
+                                                                                    'height': '460px'
                                                                                 },
                                                                                 config={
                                                                                     'modeBarButtonsToAdd': [
-                                                                                        (
-                                                                                            'select2d'
-                                                                                        ),
-                                                                                        (
-                                                                                            'lasso2d'
-                                                                                        ),
+                                                                                        'select2d',
+                                                                                        'lasso2d',
                                                                                     ],
-                                                                                    'displayModeBar': (
-                                                                                        True
-                                                                                    ),
-                                                                                    'scrollZoom': (
-                                                                                        True
-                                                                                    ),
-                                                                                    'doubleClick': (
-                                                                                        'reset'
-                                                                                    ),
+                                                                                    'displayModeBar': True,
+                                                                                    'scrollZoom': True,
+                                                                                    'doubleClick': 'reset',
                                                                                 },
                                                                             )
                                                                         ]
                                                                     ),
                                                                 ],
-                                                                className=(
-                                                                    'shadow-sm'
-                                                                    ' mb-4'
-                                                                ),
+                                                                className='shadow-sm mb-4',
                                                                 style={
-                                                                    'borderRadius': (
-                                                                        '8px'
-                                                                    ),
-                                                                    'border': (
-                                                                        '1px'
-                                                                        ' solid'
-                                                                        ' #e2e8f0'
-                                                                    ),
+                                                                    'borderRadius': '8px',
+                                                                    'border': '1px solid #e2e8f0',
                                                                 },
                                                             )
                                                         ],
@@ -1026,53 +999,29 @@ app.layout = html.Div([
                                                         [
                                                             dbc.Card(
                                                                 [
-                                                                    (
-                                                                        dbc.CardHeader(
-                                                                            'Análise'
-                                                                            ' Auxiliar'
-                                                                            ' Temporal'
-                                                                            ' (Boxplot)',
-                                                                            style={
-                                                                                'backgroundColor': (
-                                                                                    '#f8fafc'
-                                                                                ),
-                                                                                'fontWeight': (
-                                                                                    'bold'
-                                                                                ),
-                                                                                'color': (
-                                                                                    '#1e293b'
-                                                                                ),
-                                                                            },
-                                                                        )
+                                                                    dbc.CardHeader(
+                                                                        'Análise Auxiliar Temporal (Boxplot)',
+                                                                        style={
+                                                                            'backgroundColor': '#f8fafc',
+                                                                            'fontWeight': 'bold',
+                                                                            'color': '#1e293b',
+                                                                        },
                                                                     ),
                                                                     dbc.CardBody(
                                                                         [
                                                                             dcc.Graph(
-                                                                                id=(
-                                                                                    'dim-reduction-aux-graph'
-                                                                                ),
+                                                                                id='dim-reduction-aux-graph',
                                                                                 style={
-                                                                                    'height': (
-                                                                                        '460px'
-                                                                                    )
+                                                                                    'height': '460px'
                                                                                 },
                                                                             )
                                                                         ]
                                                                     ),
                                                                 ],
-                                                                className=(
-                                                                    'shadow-sm'
-                                                                    ' mb-4'
-                                                                ),
+                                                                className='shadow-sm mb-4',
                                                                 style={
-                                                                    'borderRadius': (
-                                                                        '8px'
-                                                                    ),
-                                                                    'border': (
-                                                                        '1px'
-                                                                        ' solid'
-                                                                        ' #e2e8f0'
-                                                                    ),
+                                                                    'borderRadius': '8px',
+                                                                    'border': '1px solid #e2e8f0',
                                                                 },
                                                             )
                                                         ],
@@ -1086,160 +1035,77 @@ app.layout = html.Div([
                                                         [
                                                             dbc.Card(
                                                                 [
-                                                                    (
-                                                                        dbc.CardHeader(
-                                                                            'Tabela'
-                                                                            ' Auxiliar'
-                                                                            ' de'
-                                                                            ' Instâncias'
-                                                                            ' (Seleção'
-                                                                            ' por'
-                                                                            ' Brushing)'
-                                                                            ' ',
-                                                                            style={
-                                                                                'backgroundColor': (
-                                                                                    '#f8fafc'
-                                                                                ),
-                                                                                'fontWeight': (
-                                                                                    'bold'
-                                                                                ),
-                                                                                'color': (
-                                                                                    '#1e293b'
-                                                                                ),
-                                                                            },
-                                                                        )
+                                                                    dbc.CardHeader(
+                                                                        'Tabela Auxiliar de Instâncias (Seleção por Brushing) ',
+                                                                        style={
+                                                                            'backgroundColor': '#f8fafc',
+                                                                            'fontWeight': 'bold',
+                                                                            'color': '#1e293b',
+                                                                        },
                                                                     ),
                                                                     dbc.CardBody(
                                                                         [
-                                                                            (
-                                                                                dash_table.DataTable(
-                                                                                    id=(
-                                                                                        'dim-tabela-instancias'
-                                                                                    ),
-                                                                                    columns=[
-                                                                                        {
-                                                                                            'name': (
-                                                                                                'Instância'
-                                                                                                ' ID'
-                                                                                            ),
-                                                                                            'id': (
-                                                                                                'instancia_id'
-                                                                                            ),
-                                                                                        },
-                                                                                        {
-                                                                                            'name': (
-                                                                                                'Época'
-                                                                                            ),
-                                                                                            'id': (
-                                                                                                'epoca'
-                                                                                            ),
-                                                                                        },
-                                                                                        {
-                                                                                            'name': (
-                                                                                                'Método'
-                                                                                                ' XAI'
-                                                                                            ),
-                                                                                            'id': (
-                                                                                                'metodo_xai'
-                                                                                            ),
-                                                                                        },
-                                                                                        {
-                                                                                            'name': (
-                                                                                                'Classe'
-                                                                                                ' Real'
-                                                                                            ),
-                                                                                            'id': (
-                                                                                                'classe_real'
-                                                                                            ),
-                                                                                        },
-                                                                                        {
-                                                                                            'name': (
-                                                                                                'Classe'
-                                                                                                ' Predita'
-                                                                                            ),
-                                                                                            'id': (
-                                                                                                'classe_predita'
-                                                                                            ),
-                                                                                        },
-                                                                                        {
-                                                                                            'name': (
-                                                                                                'Erro'
-                                                                                                ' Predição'
-                                                                                            ),
-                                                                                            'id': (
-                                                                                                'erro_predicao'
-                                                                                            ),
-                                                                                        },
-                                                                                        {
-                                                                                            'name': (
-                                                                                                'Coord'
-                                                                                                ' X'
-                                                                                            ),
-                                                                                            'id': (
-                                                                                                'tsne_dim_1'
-                                                                                            ),
-                                                                                        },
-                                                                                        {
-                                                                                            'name': (
-                                                                                                'Coord'
-                                                                                                ' Y'
-                                                                                            ),
-                                                                                            'id': (
-                                                                                                'tsne_dim_2'
-                                                                                            ),
-                                                                                        },
-                                                                                    ],
-                                                                                    data=[],
-                                                                                    page_size=6,
-                                                                                    row_selectable=(
-                                                                                        'multi'
-                                                                                    ),
-                                                                                    selected_rows=[],
-                                                                                    style_table={
-                                                                                        'overflowX': (
-                                                                                            'auto'
-                                                                                        )
+                                                                            dash_table.DataTable(
+                                                                                id='dim-tabela-instancias',
+                                                                                columns=[
+                                                                                    {
+                                                                                        'name': 'Instância ID',
+                                                                                        'id': 'instancia_id',
                                                                                     },
-                                                                                    style_cell={
-                                                                                        'textAlign': (
-                                                                                            'left'
-                                                                                        ),
-                                                                                        'fontFamily': (
-                                                                                            'sans-serif'
-                                                                                        ),
-                                                                                        'fontSize': (
-                                                                                            '12px'
-                                                                                        ),
+                                                                                    {
+                                                                                        'name': 'Época',
+                                                                                        'id': 'epoca',
                                                                                     },
-                                                                                    style_header={
-                                                                                        'backgroundColor': (
-                                                                                            '#f1f5f9'
-                                                                                        ),
-                                                                                        'fontWeight': (
-                                                                                            'bold'
-                                                                                        ),
-                                                                                        'color': (
-                                                                                            '#1e293b'
-                                                                                        ),
+                                                                                    {
+                                                                                        'name': 'Método XAI',
+                                                                                        'id': 'metodo_xai',
                                                                                     },
-                                                                                )
+                                                                                    {
+                                                                                        'name': 'Classe Real',
+                                                                                        'id': 'classe_real',
+                                                                                    },
+                                                                                    {
+                                                                                        'name': 'Classe Predita',
+                                                                                        'id': 'classe_predita',
+                                                                                    },
+                                                                                    {
+                                                                                        'name': 'Erro Predição',
+                                                                                        'id': 'erro_predicao',
+                                                                                    },
+                                                                                    {
+                                                                                        'name': 'Coord X',
+                                                                                        'id': 'tsne_dim_1',
+                                                                                    },
+                                                                                    {
+                                                                                        'name': 'Coord Y',
+                                                                                        'id': 'tsne_dim_2',
+                                                                                    },
+                                                                                ],
+                                                                                data=[],
+                                                                                page_size=6,
+                                                                                row_selectable='multi',
+                                                                                selected_rows=[],
+                                                                                style_table={
+                                                                                    'overflowX': 'auto'
+                                                                                },
+                                                                                style_cell={
+                                                                                    'textAlign': 'left',
+                                                                                    'fontFamily': 'sans-serif',
+                                                                                    'fontSize': '12px',
+                                                                                },
+                                                                                style_header={
+                                                                                    'backgroundColor': '#f1f5f9',
+                                                                                    'fontWeight': 'bold',
+                                                                                    'color': '#1e293b',
+                                                                                },
                                                                             )
                                                                         ]
                                                                     ),
                                                                 ],
-                                                                className=(
-                                                                    'shadow-sm'
-                                                                    ' mb-4'
-                                                                ),
+                                                                className='shadow-sm mb-4',
                                                                 style={
-                                                                    'borderRadius': (
-                                                                        '8px'
-                                                                    ),
-                                                                    'border': (
-                                                                        '1px'
-                                                                        ' solid'
-                                                                        ' #e2e8f0'
-                                                                    ),
+                                                                    'borderRadius': '8px',
+                                                                    'border': '1px solid #e2e8f0',
                                                                 },
                                                             )
                                                         ],
@@ -1264,57 +1130,29 @@ app.layout = html.Div([
                                                         [
                                                             dbc.Card(
                                                                 [
-                                                                    (
-                                                                        dbc.CardHeader(
-                                                                            'Evolução'
-                                                                            ' da'
-                                                                            ' Performance'
-                                                                            ' do'
-                                                                            ' Modelo'
-                                                                            ' (Acurácia'
-                                                                            ' &'
-                                                                            ' Loss)',
-                                                                            style={
-                                                                                'backgroundColor': (
-                                                                                    '#f8fafc'
-                                                                                ),
-                                                                                'fontWeight': (
-                                                                                    'bold'
-                                                                                ),
-                                                                                'color': (
-                                                                                    '#1e293b'
-                                                                                ),
-                                                                            },
-                                                                        )
+                                                                    dbc.CardHeader(
+                                                                        'Evolução da Performance do Modelo (Acurácia & Loss)',
+                                                                        style={
+                                                                            'backgroundColor': '#f8fafc',
+                                                                            'fontWeight': 'bold',
+                                                                            'color': '#1e293b',
+                                                                        },
                                                                     ),
                                                                     dbc.CardBody(
                                                                         [
                                                                             dcc.Graph(
-                                                                                id=(
-                                                                                    'performance-graph'
-                                                                                ),
+                                                                                id='performance-graph',
                                                                                 style={
-                                                                                    'height': (
-                                                                                        '380px'
-                                                                                    )
+                                                                                    'height': '380px'
                                                                                 },
                                                                             )
                                                                         ]
                                                                     ),
                                                                 ],
-                                                                className=(
-                                                                    'shadow-sm'
-                                                                    ' mb-4'
-                                                                ),
+                                                                className='shadow-sm mb-4',
                                                                 style={
-                                                                    'borderRadius': (
-                                                                        '8px'
-                                                                    ),
-                                                                    'border': (
-                                                                        '1px'
-                                                                        ' solid'
-                                                                        ' #e2e8f0'
-                                                                    ),
+                                                                    'borderRadius': '8px',
+                                                                    'border': '1px solid #e2e8f0',
                                                                 },
                                                             )
                                                         ],
@@ -1327,54 +1165,29 @@ app.layout = html.Div([
                                                         [
                                                             dbc.Card(
                                                                 [
-                                                                    (
-                                                                        dbc.CardHeader(
-                                                                            'Matriz'
-                                                                            ' de'
-                                                                            ' Confusão'
-                                                                            ' (Época'
-                                                                            ' Selecionada)',
-                                                                            style={
-                                                                                'backgroundColor': (
-                                                                                    '#f8fafc'
-                                                                                ),
-                                                                                'fontWeight': (
-                                                                                    'bold'
-                                                                                ),
-                                                                                'color': (
-                                                                                    '#1e293b'
-                                                                                ),
-                                                                            },
-                                                                        )
+                                                                    dbc.CardHeader(
+                                                                        'Matriz de Confusão (Época Selecionada)',
+                                                                        style={
+                                                                            'backgroundColor': '#f8fafc',
+                                                                            'fontWeight': 'bold',
+                                                                            'color': '#1e293b',
+                                                                        },
                                                                     ),
                                                                     dbc.CardBody(
                                                                         [
                                                                             dcc.Graph(
-                                                                                id=(
-                                                                                    'confusion-matrix-graph'
-                                                                                ),
+                                                                                id='confusion-matrix-graph',
                                                                                 style={
-                                                                                    'height': (
-                                                                                        '360px'
-                                                                                    )
+                                                                                    'height': '380px'
                                                                                 },
                                                                             )
                                                                         ]
                                                                     ),
                                                                 ],
-                                                                className=(
-                                                                    'shadow-sm'
-                                                                    ' mb-4'
-                                                                ),
+                                                                className='shadow-sm mb-4',
                                                                 style={
-                                                                    'borderRadius': (
-                                                                        '8px'
-                                                                    ),
-                                                                    'border': (
-                                                                        '1px'
-                                                                        ' solid'
-                                                                        ' #e2e8f0'
-                                                                    ),
+                                                                    'borderRadius': '8px',
+                                                                    'border': '1px solid #e2e8f0',
                                                                 },
                                                             )
                                                         ],
@@ -1385,125 +1198,35 @@ app.layout = html.Div([
                                                         [
                                                             dbc.Card(
                                                                 [
-                                                                    (
-                                                                        dbc.CardHeader(
-                                                                            'Métricas'
-                                                                            ' de'
-                                                                            ' Classificação'
-                                                                            ' (Precision,'
-                                                                            ' Recall,'
-                                                                            ' F1'
-                                                                            ' &'
-                                                                            ' AUC)',
-                                                                            style={
-                                                                                'backgroundColor': (
-                                                                                    '#f8fafc'
-                                                                                ),
-                                                                                'fontWeight': (
-                                                                                    'bold'
-                                                                                ),
-                                                                                'color': (
-                                                                                    '#1e293b'
-                                                                                ),
-                                                                            },
-                                                                        )
+                                                                    dbc.CardHeader(
+                                                                        'Métricas de Classificação por Época (Precision, Recall, F1, AUC)',
+                                                                        style={
+                                                                            'backgroundColor': '#f8fafc',
+                                                                            'fontWeight': 'bold',
+                                                                            'color': '#1e293b',
+                                                                        },
                                                                     ),
                                                                     dbc.CardBody(
                                                                         [
                                                                             dcc.Graph(
-                                                                                id=(
-                                                                                    'class-metrics-graph'
-                                                                                ),
+                                                                                id='validation-metrics-graph',
                                                                                 style={
-                                                                                    'height': (
-                                                                                        '360px'
-                                                                                    )
+                                                                                    'height': '380px'
                                                                                 },
                                                                             )
                                                                         ]
                                                                     ),
                                                                 ],
-                                                                className=(
-                                                                    'shadow-sm'
-                                                                    ' mb-4'
-                                                                ),
+                                                                className='shadow-sm mb-4',
                                                                 style={
-                                                                    'borderRadius': (
-                                                                        '8px'
-                                                                    ),
-                                                                    'border': (
-                                                                        '1px'
-                                                                        ' solid'
-                                                                        ' #e2e8f0'
-                                                                    ),
+                                                                    'borderRadius': '8px',
+                                                                    'border': '1px solid #e2e8f0',
                                                                 },
                                                             )
                                                         ],
                                                         width=12,
                                                         lg=6,
                                                     ),
-                                                ]),
-                                                # 3. Distribuição dos Erros
-                                                dbc.Row([
-                                                    dbc.Col(
-                                                        [
-                                                            dbc.Card(
-                                                                [
-                                                                    (
-                                                                        dbc.CardHeader(
-                                                                            'Distribuição'
-                                                                            ' dos'
-                                                                            ' Erros'
-                                                                            ' de'
-                                                                            ' Predição'
-                                                                            ' Por'
-                                                                            ' Classe',
-                                                                            style={
-                                                                                'backgroundColor': (
-                                                                                    '#f8fafc'
-                                                                                ),
-                                                                                'fontWeight': (
-                                                                                    'bold'
-                                                                                ),
-                                                                                'color': (
-                                                                                    '#1e293b'
-                                                                                ),
-                                                                            },
-                                                                        )
-                                                                    ),
-                                                                    dbc.CardBody(
-                                                                        [
-                                                                            dcc.Graph(
-                                                                                id=(
-                                                                                    'error-distribution-graph'
-                                                                                ),
-                                                                                style={
-                                                                                    'height': (
-                                                                                        '380px'
-                                                                                    )
-                                                                                },
-                                                                            )
-                                                                        ]
-                                                                    ),
-                                                                ],
-                                                                className=(
-                                                                    'shadow-sm'
-                                                                    ' mb-4'
-                                                                ),
-                                                                style={
-                                                                    'borderRadius': (
-                                                                        '8px'
-                                                                    ),
-                                                                    'border': (
-                                                                        '1px'
-                                                                        ' solid'
-                                                                        ' #e2e8f0'
-                                                                    ),
-                                                                },
-                                                            )
-                                                        ],
-                                                        width=12,
-                                                    )
                                                 ]),
                                             ],
                                             style={'paddingTop': '15px'},
@@ -1511,7 +1234,7 @@ app.layout = html.Div([
                                     ],
                                 ),
                             ],
-                            id='tabs-main',
+                            id='tabs-principais',
                             active_tab='tab-explicabilidade',
                         )
                     ],
@@ -1521,1071 +1244,939 @@ app.layout = html.Div([
         ],
         fluid=True,
         style={
-            'backgroundColor': '#f4f7f9',
-            'padding': '20px',
+            'backgroundColor': '#f1f5f9',
             'minHeight': '100vh',
+            'paddingTop': '20px',
         },
     ),
 ])
 
 
 # ==========================================
-# 3. CALLBACKS DE ATUALIZAÇÃO
+# 3. CALLBACKS REATIVOS DO DASHBOARD
 # ==========================================
-
-
 @app.callback(
     [
         Output('dropdown-metodo', 'options'),
         Output('dropdown-metodo', 'value'),
-        Output('dim-dropdown-epoca', 'options'),
-        Output('dim-dropdown-epoca', 'value'),
         Output('slider-epocas', 'min'),
         Output('slider-epocas', 'max'),
         Output('slider-epocas', 'marks'),
         Output('slider-epocas', 'value'),
+        Output('dim-dropdown-epoca', 'options'),
+        Output('dim-dropdown-epoca', 'value'),
     ],
     [Input('dropdown-dataset', 'value')],
+    [State('dropdown-metodo', 'value')],
 )
-def update_options(dataset_sel):
-  df_d3 = carregar_csv_seguro('explicacoes_instancias', dataset_sel)
-  df_d6 = carregar_csv_seguro('projecao_tsne_epocas', dataset_sel)
+def atualizar_controles_dataset(dataset_sel, metodo_atual):
+  df_d3, df_d2 = carregar_dados_sankey(dataset_sel)
 
-  metodos = ['SHAP', 'PFI', 'LIME', 'IG']
+  metodos_disponiveis = []
   if not df_d3.empty and 'metodo_xai' in df_d3.columns:
-    metodos = sorted(list(df_d3['metodo_xai'].dropna().unique()))
+    unicos = [
+        str(m)
+        for m in df_d3['metodo_xai'].dropna().unique()
+        if str(m) != CODIGO_MEDIA_GERAL
+    ]
+    ordenados = [m for m in METODOS_BASE_XAI if m in unicos] + [
+        m for m in unicos if m not in METODOS_BASE_XAI
+    ]
+    metodos_disponiveis = ordenados
 
-  epocas = [1, 10, 20, 30, 40]
-  if not df_d6.empty and 'epoca' in df_d6.columns:
-    epocas = sorted([int(x) for x in df_d6['epoca'].dropna().unique()])
-  elif not df_d3.empty and 'epoca' in df_d3.columns:
-    epocas = sorted([int(x) for x in df_d3['epoca'].dropna().unique()])
+  opcoes_metodo = [
+      {'label': LABEL_MEDIA_GERAL, 'value': CODIGO_MEDIA_GERAL}
+  ] + [
+      {'label': formatar_label_metodo(m), 'value': m}
+      for m in metodos_disponiveis
+  ]
 
-  options_metodo = [{'label': str(m).upper(), 'value': m} for m in metodos]
-  val_metodo = metodos[0] if metodos else 'SHAP'
+  valores_validos = [o['value'] for o in opcoes_metodo]
+  metodo_sel = (
+      metodo_atual if metodo_atual in valores_validos else CODIGO_MEDIA_GERAL
+  )
 
-  opt_epocas = [{'label': f'Época {ep}', 'value': ep} for ep in epocas]
-  val_epoca = epocas[0] if epocas else 1
+  epocas = []
+  if not df_d3.empty and 'epoca' in df_d3.columns:
+    epocas = sorted(
+        pd.to_numeric(df_d3['epoca'], errors='coerce')
+        .dropna()
+        .astype(int)
+        .unique()
+        .tolist()
+    )
+  elif not df_d2.empty and 'epoca' in df_d2.columns:
+    epocas = sorted(
+        pd.to_numeric(df_d2['epoca'], errors='coerce')
+        .dropna()
+        .astype(int)
+        .unique()
+        .tolist()
+    )
 
-  min_ep = min(epocas) if epocas else 1
-  max_ep = max(epocas) if epocas else 40
-  marks_ep = {int(ep): f'{ep}' for ep in epocas} if epocas else {1: '1'}
+  if not epocas:
+    epocas = [1, 40]
+
+  ep_min, ep_max = epocas[0], epocas[-1]
+  marks = {int(e): str(e) for e in epocas}
+  opcoes_epocas = [{'label': f'Época {e}', 'value': int(e)} for e in epocas]
 
   return (
-      options_metodo,
-      val_metodo,
-      opt_epocas,
-      val_epoca,
-      min_ep,
-      max_ep,
-      marks_ep,
-      [min_ep, max_ep],
+      opcoes_metodo,
+      metodo_sel,
+      ep_min,
+      ep_max,
+      marks,
+      [ep_min, ep_max],
+      opcoes_epocas,
+      ep_max,
   )
 
 
-# CALLBACK CENTRAL DE ESTADO
 @app.callback(
     [
         Output('store-instancias-selecionadas', 'data'),
-        Output('store-ultimo-click-box', 'data'),
-    ],
-    [
-        Input('dim-scatter-graph', 'selectedData'),
-        Input('dim-scatter-graph', 'clickData'),
-        Input('sankey-graph', 'clickData'),
-        Input('dim-reduction-aux-graph', 'clickData'),
-        Input('dim-tabela-instancias', 'selected_rows'),
-        Input('badge-limpar-sankey', 'n_clicks'),
-        Input('dropdown-dataset', 'value'),
-        Input('dropdown-metodo', 'value'),
-        Input('dim-dropdown-epoca', 'value'),
-        Input('slider-epocas', 'value'),
-    ],
-    [
-        State('store-instancias-selecionadas', 'data'),
-        State('store-ultimo-click-box', 'data'),
-        State('dim-tabela-instancias', 'data'),
-    ],
-)
-def gerenciar_estado_selecao(
-    selectedDataScatter,
-    clickDataScatter,
-    clickDataSankey,
-    clickDataBoxplot,
-    selected_rows_table,
-    btn_badge_clicks,
-    dataset_sel,
-    metodo_sel,
-    epoca_proj_sel,
-    epocas_sel,
-    state_selected_ids,
-    state_last_box,
-    table_data,
-):
-  ctx = callback_context
-  triggered_id = (
-      ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
-  )
-
-  if triggered_id in [
-      'badge-limpar-sankey',
-      'dropdown-dataset',
-      'dropdown-metodo',
-      'dim-dropdown-epoca',
-  ]:
-    return [], None
-
-  if (
-      triggered_id == 'dim-scatter-graph'
-      and selectedDataScatter is None
-      and clickDataScatter is None
-  ):
-    return [], None
-
-  selected_ids = []
-
-  # 1. CLIQUE NO BOXPLOT
-  if (
-      triggered_id == 'dim-reduction-aux-graph'
-      and clickDataBoxplot
-      and 'points' in clickDataBoxplot
-      and len(clickDataBoxplot['points']) > 0
-  ):
-    p_box = clickDataBoxplot['points'][0]
-    if 'customdata' in p_box and len(p_box['customdata']) > 0:
-      inst_id = str(p_box['customdata'][0])
-      if state_last_box == inst_id:
-        return [], None
-      else:
-        return [inst_id], inst_id
-
-  # 2. SELEÇÃO VIA SANKEY
-  if (
-      triggered_id == 'sankey-graph'
-      and clickDataSankey
-      and 'points' in clickDataSankey
-      and len(clickDataSankey['points']) > 0
-  ):
-    pt_s = clickDataSankey['points'][0]
-    if 'pointNumber' in pt_s:
-      df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
-      df_sankey_proc, _, _ = processar_dados_sankey(
-          df_d3_sankey, df_d2_sankey, dataset_sel, normalizar=True
-      )
-      if not df_sankey_proc.empty:
-        m_alvo = (
-            metodo_sel
-            if metodo_sel in df_sankey_proc['metodo_xai'].unique()
-            else df_sankey_proc['metodo_xai'].iloc[0]
-        )
-        df_fil = df_sankey_proc[df_sankey_proc['metodo_xai'] == m_alvo]
-        if epocas_sel:
-          df_fil = df_fil[
-              (df_fil['epoca_origem'] >= epocas_sel[0])
-              & (df_fil['epoca_destino'] <= epocas_sel[1])
-          ]
-
-        if pt_s['pointNumber'] < len(df_fil):
-          row_flow = df_fil.iloc[pt_s['pointNumber']]
-          ids_sankey = [str(x) for x in row_flow['lista_instancias']]
-
-          df_d6 = carregar_csv_seguro('projecao_tsne_epocas', dataset_sel)
-          if not df_d6.empty and 'classe_predita' in df_d6.columns:
-            epoca_check = row_flow['epoca_origem']
-            classe_origem_alvo = row_flow['classe_origem']
-
-            df_d6_sub = df_d6[
-                (
-                    df_d6['metodo_xai'].astype(str).str.upper()
-                    == str(m_alvo).upper()
-                )
-                & (df_d6['epoca'] == int(epoca_check))
-                & (df_d6['classe_predita'] == int(classe_origem_alvo))
-            ]
-            valid_ids_set = set(df_d6_sub['instancia_id'].astype(str))
-            ids_sankey = [i for i in ids_sankey if i in valid_ids_set]
-
-          return ids_sankey, None
-
-  # 3. SELEÇÃO VIA BRUSHING NO SPATIAL SCATTER (2D)
-  if triggered_id == 'dim-scatter-graph':
-    if (
-        selectedDataScatter is not None
-        and 'points' in selectedDataScatter
-        and len(selectedDataScatter['points']) > 0
-    ):
-      for pt in selectedDataScatter['points']:
-        if (
-            'customdata' in pt
-            and isinstance(pt['customdata'], list)
-            and len(pt['customdata']) > 0
-        ):
-          selected_ids.append(str(pt['customdata'][0]))
-      selected_ids = list(dict.fromkeys(selected_ids))
-      return selected_ids, None
-    elif (
-        clickDataScatter
-        and 'points' in clickDataScatter
-        and len(clickDataScatter['points']) > 0
-    ):
-      p_click = clickDataScatter['points'][0]
-      if 'customdata' in p_click and len(p_click['customdata']) > 0:
-        inst_id = str(p_click['customdata'][0])
-        if state_selected_ids == [inst_id]:
-          return [], None
-        return [inst_id], None
-
-  # 4. SELEÇÃO VIA TABELA
-  if (
-      triggered_id == 'dim-tabela-instancias'
-      and selected_rows_table
-      and table_data
-  ):
-    for r_idx in selected_rows_table:
-      if r_idx < len(table_data):
-        selected_ids.append(str(table_data[r_idx]['instancia_id']))
-    return selected_ids, None
-
-  return state_selected_ids or [], state_last_box
-
-
-# CALLBACK PRINCIPAL DOS GRÁFICOS (ESCALA NORMALIZADA [0 - 1] FIXA ENTRE MÉTODOS)
-@app.callback(
-    [
-        Output('performance-graph', 'figure'),
-        Output('stability-graph', 'figure'),
-        Output('heatmap-graph', 'figure'),
-        Output('dim-scatter-graph', 'figure'),
-        Output('dim-reduction-aux-graph', 'figure'),
-        Output('sankey-graph', 'figure'),
-        Output('confusion-matrix-graph', 'figure'),
-        Output('class-metrics-graph', 'figure'),
-        Output('error-distribution-graph', 'figure'),
         Output('badge-limpar-sankey', 'children'),
         Output('badge-limpar-sankey', 'style'),
     ],
     [
+        Input('dim-scatter-graph', 'selectedData'),
+        Input('sankey-graph', 'clickData'),
+        Input('badge-limpar-sankey', 'n_clicks'),
+        Input('dropdown-dataset', 'value'),
+    ],
+    [State('store-instancias-selecionadas', 'data')],
+)
+def sincronizar_selecao_instancias(
+    selected_data, sankey_click, n_clicks_limpar, dataset_sel, selecao_atual
+):
+  ctx = callback_context
+  trigger_id = (
+      ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else ''
+  )
+
+  estilo_oculto = {
+      'cursor': 'pointer',
+      'fontSize': '11px',
+      'padding': '5px 9px',
+      'borderRadius': '12px',
+      'boxShadow': '0 2px 4px rgba(0,0,0,0.1)',
+      'display': 'none',
+  }
+  estilo_visivel = {**estilo_oculto, 'display': 'inline-block'}
+
+  if trigger_id in ['badge-limpar-sankey', 'dropdown-dataset']:
+    return [], '', estilo_oculto
+
+  novas_insts = list(selecao_atual or [])
+
+  if trigger_id == 'dim-scatter-graph':
+    if selected_data and selected_data.get('points'):
+      novas_insts = sorted(
+          list({
+              str(p['customdata'][0])
+              for p in selected_data['points']
+              if p.get('customdata')
+          })
+      )
+    else:
+      novas_insts = []
+
+  elif trigger_id == 'sankey-graph' and sankey_click and sankey_click.get('points'):
+    pt = sankey_click['points'][0]
+    cd = pt.get('customdata')
+    if isinstance(cd, list):
+      novas_insts = sorted(list({str(x) for x in cd}))
+    elif cd is not None:
+      novas_insts = [str(cd)]
+
+  if novas_insts:
+    return (
+        novas_insts,
+        f'Limpar Filtro ({len(novas_insts)} instâncias)',
+        estilo_visivel,
+    )
+  return [], '', estilo_oculto
+
+
+@app.callback(
+    Output('sankey-graph', 'figure'),
+    [
+        Input('dropdown-dataset', 'value'),
+        Input('dropdown-metodo', 'value'),
+        Input('dropdown-cor-metrica', 'value'),
+        Input('slider-epocas', 'value'),
+        Input('store-instancias-selecionadas', 'data'),
+    ],
+)
+def atualizar_sankey(
+    dataset_sel, metodo_sel, cor_metrica, intervalo_epocas, insts_selecionadas
+):
+  df_d3, df_d2 = carregar_dados_sankey(dataset_sel)
+  if df_d3.empty or df_d2.empty:
+    return go.Figure().update_layout(
+        title='Dados indisponíveis para o Sankey'
+    )
+
+  if insts_selecionadas:
+    df_d3_filtrado = df_d3[
+        df_d3['instancia_id'].astype(str).isin(
+            [str(i) for i in insts_selecionadas]
+        )
+    ]
+    if not df_d3_filtrado.empty:
+      df_d3 = df_d3_filtrado
+
+  df_sankey, _, _ = processar_dados_sankey(
+      df_d3, df_d2, dataset_sel, normalizar=True
+  )
+  if df_sankey.empty:
+    return go.Figure().update_layout(
+        title='Sem transições suficientes para exibir o Sankey'
+    )
+
+  metodo_alvo = metodo_sel or CODIGO_MEDIA_GERAL
+  df_m = df_sankey[df_sankey['metodo_xai'] == metodo_alvo].copy()
+  if df_m.empty:
+    df_m = df_sankey.copy()
+
+  if intervalo_epocas and len(intervalo_epocas) == 2:
+    ep_ini, ep_fim = intervalo_epocas
+    df_m = df_m[
+        (df_m['epoca_origem'] >= ep_ini) & (df_m['epoca_destino'] <= ep_fim)
+    ]
+
+  if df_m.empty:
+    return go.Figure().update_layout(
+        title='Nenhuma transição no intervalo de épocas selecionado'
+    )
+
+  mapa_classes = Mapeamento_classes_dataset(dataset_sel)
+
+  nos_unicos = []
+  for _, row in df_m.iterrows():
+    n_orig = f"Ép {int(row['epoca_origem'])} | {mapa_classes.get(int(row['classe_origem']), row['classe_origem'])}"
+    n_dest = f"Ép {int(row['epoca_destino'])} | {mapa_classes.get(int(row['classe_destino']), row['classe_destino'])}"
+    if n_orig not in nos_unicos:
+      nos_unicos.append(n_orig)
+    if n_dest not in nos_unicos:
+      nos_unicos.append(n_dest)
+
+  idx_nos = {nome: i for i, nome in enumerate(nos_unicos)}
+  cores_nos = [
+      '#3b82f6' if mapa_classes.get(0, 'Classe 0') in nome else '#ef4444'
+      for nome in nos_unicos
+  ]
+
+  sources, targets, values, link_colors, customdata, hovertexts = (
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+  )
+  for _, row in df_m.iterrows():
+    n_orig = f"Ép {int(row['epoca_origem'])} | {mapa_classes.get(int(row['classe_origem']), row['classe_origem'])}"
+    n_dest = f"Ép {int(row['epoca_destino'])} | {mapa_classes.get(int(row['classe_destino']), row['classe_destino'])}"
+    sources.append(idx_nos[n_orig])
+    targets.append(idx_nos[n_dest])
+    peso = max(float(row['soma_importancia']), 1e-4)
+    values.append(peso)
+    customdata.append(row['lista_instancias'])
+
+    if cor_metrica == 'confianca':
+      alpha = np.clip(float(row['confianca_media']), 0.25, 0.85)
+      link_colors.append(f'rgba(16, 185, 129, {alpha:.2f})')
+    elif cor_metrica == 'erro':
+      err = float(row['taxa_erro'])
+      link_colors.append(
+          f'rgba(239, 68, 68, {np.clip(0.25 + err * 0.6, 0.25, 0.85):.2f})'
+      )
+    else:
+      c_orig = int(row['classe_origem'])
+      link_colors.append(
+          'rgba(59, 130, 246, 0.45)'
+          if c_orig == 0
+          else 'rgba(239, 68, 68, 0.45)'
+      )
+
+    hovertexts.append(
+        f'<b>{formatar_label_metodo(metodo_alvo)}</b><br>'
+        f'{n_orig} → {n_dest}<br>'
+        f"Instâncias: {int(row['qtd_instancias'])}<br>"
+        f"Importância Média: {row['importancia_media']:.4f}<br>"
+        f"Confiança Média: {row['confianca_media']:.2%}<br>"
+        f"Taxa de Erro: {row['taxa_erro']:.2%}"
+    )
+
+  fig = go.Figure(
+      data=[
+          go.Sankey(
+              node=dict(
+                  pad=15,
+                  thickness=18,
+                  line=dict(color='#1e293b', width=0.5),
+                  label=nos_unicos,
+                  color=cores_nos,
+              ),
+              link=dict(
+                  source=sources,
+                  target=targets,
+                  value=values,
+                  color=link_colors,
+                  customdata=customdata,
+                  hovertemplate='%{customdata_hover}<extra></extra>',
+              ),
+          )
+      ]
+  )
+  fig.data[0].link.hovertemplate = '%{label}<extra></extra>'
+  fig.data[0].link.label = hovertexts
+
+  fig.update_layout(
+      title=dict(
+          text=f'Fluxo Temporal de Decisões — {formatar_label_metodo(metodo_alvo)}',
+          font=dict(size=14, color='#1e293b'),
+      ),
+      font=dict(size=11),
+      margin=dict(l=15, r=15, t=45, b=15),
+  )
+  return fig
+
+
+@app.callback(
+    Output('heatmap-graph', 'figure'),
+    [
+        Input('dropdown-dataset', 'value'),
+        Input('dropdown-metodo', 'value'),
+        Input('store-instancias-selecionadas', 'data'),
+    ],
+)
+def atualizar_heatmap(dataset_sel, metodo_sel, insts_selecionadas):
+  df_d3, _ = carregar_dados_sankey(dataset_sel)
+  if df_d3.empty:
+    return go.Figure().update_layout(
+        title='Sem dados de explicação para o Heatmap'
+    )
+
+  col_feat = detectar_coluna_feature(df_d3)
+  if not col_feat:
+    return go.Figure().update_layout(
+        title='Coluna de features não identificada no dataset'
+    )
+
+  if insts_selecionadas:
+    df_sub = df_d3[
+        df_d3['instancia_id'].astype(str).isin(
+            [str(i) for i in insts_selecionadas]
+        )
+    ]
+    if not df_sub.empty:
+      df_d3 = df_sub
+
+  df_d3 = normalizar_coluna_por_grupo(
+      df_d3, 'importancia_absoluta', ['metodo_xai']
+  )
+  df_d3['epoca'] = (
+      pd.to_numeric(df_d3['epoca'], errors='coerce').fillna(0).astype(int)
+  )
+
+  metodo_alvo = metodo_sel or CODIGO_MEDIA_GERAL
+  df_m = df_d3[df_d3['metodo_xai'] == metodo_alvo].copy()
+  if df_m.empty:
+    df_m = df_d3.copy()
+
+  # Agrega importância média por feature e época
+  df_agg = (
+      df_m.groupby([col_feat, 'epoca'], as_index=False)['importancia_absoluta']
+      .mean()
+  )
+
+  # Ordena features pela importância global (mais relevantes no topo)
+  ordem_features = (
+      df_agg.groupby(col_feat)['importancia_absoluta']
+      .mean()
+      .sort_values(ascending=True)
+      .index.tolist()
+  )
+  epocas_ord = sorted(df_agg['epoca'].unique().tolist())
+
+  piv = df_agg.pivot(
+      index=col_feat, columns='epoca', values='importancia_absoluta'
+  ).reindex(index=ordem_features, columns=epocas_ord)
+
+  # Constrói hover detalhado: quando MEDIA_GERAL está selecionado, exibe também
+  # o valor individual das 4 métricas base (SHAP, LIME, IG, PFI)
+  detalhes_por_metodo = {}
+  if metodo_alvo == CODIGO_MEDIA_GERAL:
+    for m_base in METODOS_BASE_XAI:
+      df_mb = df_d3[df_d3['metodo_xai'] == m_base]
+      if not df_mb.empty:
+        piv_mb = (
+            df_mb.groupby([col_feat, 'epoca'])['importancia_absoluta']
+            .mean()
+            .unstack()
+            .reindex(index=ordem_features, columns=epocas_ord)
+        )
+        detalhes_por_metodo[m_base] = piv_mb
+
+  hover_matrix = []
+  for feat in ordem_features:
+    linha_hover = []
+    for ep in epocas_ord:
+      val = piv.loc[feat, ep]
+      val_str = f'{val:.4f}' if pd.notna(val) else 'N/A'
+      txt = (
+          f'<b>Feature:</b> {feat}<br>'
+          f'<b>Época:</b> {ep}<br>'
+          f'<b>{formatar_label_metodo(metodo_alvo)}:</b> {val_str}'
+      )
+      if metodo_alvo == CODIGO_MEDIA_GERAL and detalhes_por_metodo:
+        txt += '<br>--- Detalhe por Métrica ---'
+        for m_base, piv_mb in detalhes_por_metodo.items():
+          v_mb = piv_mb.loc[feat, ep]
+          if pd.notna(v_mb):
+            txt += f'<br>• {m_base}: {v_mb:.4f}'
+      linha_hover.append(txt)
+    hover_matrix.append(linha_hover)
+
+  fig = go.Figure(
+      data=go.Heatmap(
+          z=piv.values,
+          x=[str(e) for e in epocas_ord],
+          y=ordem_features,
+          colorscale=COLORSCALE_REDS_20,
+          zmin=0.0,
+          zmax=1.0,
+          text=hover_matrix,
+          hovertemplate='%{text}<extra></extra>',
+          colorbar=dict(title='Importância<br>(Norm.)'),
+      )
+  )
+
+  fig.update_layout(
+      title=dict(
+          text=f'Evolução Temporal das Features — {formatar_label_metodo(metodo_alvo)}',
+          font=dict(size=14, color='#1e293b'),
+      ),
+      xaxis_title='Época de Treinamento',
+      yaxis_title='Atributo (Feature)',
+      margin=dict(l=140, r=20, t=45, b=45),
+  )
+  return fig
+
+
+@app.callback(
+    Output('stability-graph', 'figure'),
+    [
         Input('dropdown-dataset', 'value'),
         Input('dropdown-metodo', 'value'),
         Input('dropdown-metrica-estabilidade', 'value'),
-        Input('dropdown-cor-metrica', 'value'),
-        Input('slider-epocas', 'value'),
+    ],
+)
+def atualizar_estabilidade(dataset_sel, metodo_sel, metrica_estab):
+  df_d3, _ = carregar_dados_sankey(dataset_sel)
+  if df_d3.empty:
+    return go.Figure().update_layout(
+        title='Sem dados para calcular estabilidade'
+    )
+
+  col_feat = detectar_coluna_feature(df_d3)
+  if not col_feat:
+    return go.Figure().update_layout(title='Coluna de features ausente')
+
+  df_d3 = normalizar_coluna_por_grupo(
+      df_d3, 'importancia_absoluta', ['metodo_xai']
+  )
+  df_d3['epoca'] = (
+      pd.to_numeric(df_d3['epoca'], errors='coerce').fillna(0).astype(int)
+  )
+
+  # Inclui os 4 métodos base + MEDIA_GERAL para comparação direta
+  metodos_todos = [
+      m
+      for m in (METODOS_BASE_XAI + [CODIGO_MEDIA_GERAL])
+      if m in df_d3['metodo_xai'].unique()
+  ]
+
+  fig = go.Figure()
+  for m in metodos_todos:
+    df_m = df_d3[df_d3['metodo_xai'] == m]
+    piv = (
+        df_m.groupby([col_feat, 'epoca'])['importancia_absoluta']
+        .mean()
+        .unstack()
+    )
+    epocas = sorted(piv.columns.tolist())
+    if len(epocas) < 2:
+      continue
+
+    eixos_x, valores_y = [], []
+    for i in range(1, len(epocas)):
+      ep_ant, ep_atual = epocas[i - 1], epocas[i]
+      s1 = piv[ep_ant].fillna(0.0)
+      s2 = piv[ep_atual].fillna(0.0)
+
+      if metrica_estab == 'spearman':
+        val = s1.corr(s2, method='spearman')
+        val = 1.0 if pd.isna(val) else float(val)
+      elif metrica_estab == 'mad_importancia':
+        val = float(np.mean(np.abs(s2 - s1)))
+      else:
+        val = float(np.var(s2 - s1))
+
+      eixos_x.append(f'{ep_ant}→{ep_atual}')
+      valores_y.append(val)
+
+    eh_selecionado = m == metodo_sel
+    eh_media_geral = m == CODIGO_MEDIA_GERAL
+
+    fig.add_trace(
+        go.Scatter(
+            x=eixos_x,
+            y=valores_y,
+            mode='lines+markers',
+            name=formatar_label_metodo(m),
+            line=dict(
+                color=CORES_METODOS_XAI.get(m, '#475569'),
+                width=3.5 if (eh_selecionado or eh_media_geral) else 1.8,
+                dash='dash' if eh_media_geral else 'solid',
+            ),
+            marker=dict(size=7 if eh_selecionado else 5),
+            opacity=1.0 if (eh_selecionado or eh_media_geral) else 0.65,
+        )
+    )
+
+  nomes_metrica = {
+      'spearman': 'Correlação de Spearman (Maior = Mais Estável)',
+      'mad_importancia': 'MAD Absoluto entre Épocas (Menor = Mais Estável)',
+      'variancia_importancia': 'Variância entre Épocas (Menor = Mais Estável)',
+  }
+
+  fig.update_layout(
+      title=dict(
+          text=nomes_metrica.get(metrica_estab, 'Estabilidade Temporal'),
+          font=dict(size=13, color='#1e293b'),
+      ),
+      xaxis_title='Transição de Épocas',
+      yaxis_title='Valor da Métrica',
+      legend=dict(
+          orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1
+      ),
+      margin=dict(l=50, r=20, t=65, b=45),
+      hovermode='x unified',
+  )
+  return fig
+
+
+@app.callback(
+    [
+        Output('dim-scatter-graph', 'figure'),
+        Output('dim-reduction-aux-graph', 'figure'),
+        Output('dim-tabela-instancias', 'data'),
+    ],
+    [
+        Input('dropdown-dataset', 'value'),
+        Input('dropdown-metodo', 'value'),
         Input('dim-dropdown-epoca', 'value'),
         Input('dim-dropdown-algo', 'value'),
         Input('dim-dropdown-cor', 'value'),
         Input('dim-toggle-trajetoria', 'value'),
         Input('store-instancias-selecionadas', 'data'),
-        Input('sankey-graph', 'clickData'),
-        Input('badge-limpar-sankey', 'n_clicks'),
     ],
 )
-def update_all_graphs(
+def atualizar_visualizacao_2d(
     dataset_sel,
     metodo_sel,
-    metrica_est_sel,
-    cor_sankey_sel,
-    epocas_sel,
-    epoca_proj_sel,
+    epoca_sel,
     algo_sel,
-    cor_proj_sel,
-    trajetoria_sel,
-    instancias_selecionadas_store,
-    clickDataSankey,
-    btn_badge_clicks,
+    cor_por,
+    toggle_trajetoria,
+    insts_selecionadas,
 ):
-  tag_escala = '[Norm. 0–1]'
+  df_d3, df_d2 = carregar_dados_sankey(dataset_sel)
+  df_proj = carregar_csv_seguro('projecao_tsne_epocas', dataset_sel)
 
-  df_d2 = carregar_csv_seguro('metricas_epocas', dataset_sel)
-  df_d4 = carregar_csv_seguro('resumo_explicacoes', dataset_sel)
-  df_d6 = carregar_csv_seguro('projecao_tsne_epocas', dataset_sel)
-  df_d5 = carregar_csv_seguro(
-      'metricas_estabilidade_concordancia', dataset_sel
-  )
-  df_d3 = carregar_csv_seguro('explicacoes_instancias', dataset_sel)
-  label_ds = MAPA_DATASET.get(dataset_sel, {}).get('label', dataset_sel.upper())
-  map_cls = Mapeamento_classes_dataset(dataset_sel)
+  metodo_alvo = metodo_sel or CODIGO_MEDIA_GERAL
+  mapa_classes = Mapeamento_classes_dataset(dataset_sel)
 
-  # Aplica normalização global por método XAI (preservando a evolução temporal entre épocas)
   if not df_d3.empty:
-    if 'valor_atribuicao' in df_d3.columns:
-      df_d3['valor_atribuicao_abs'] = df_d3['valor_atribuicao'].abs()
-      df_d3 = normalizar_coluna_por_grupo(
-          df_d3, 'valor_atribuicao_abs', ['metodo_xai']
-      )
-      df_d3['valor_atribuicao'] = (
-          np.sign(df_d3['valor_atribuicao']) * df_d3['valor_atribuicao_abs']
-      )
-    if 'importancia_absoluta' in df_d3.columns:
-      df_d3 = normalizar_coluna_por_grupo(
-          df_d3, 'importancia_absoluta', ['metodo_xai']
-      )
-
-  ctx = callback_context
-  triggered_id = (
-      ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
-  )
-
-  # ----------------------------------------------------
-  # 1. GRAPH 1: PERFORMANCE DO MODELO
-  # ----------------------------------------------------
-  fig_perf = go.Figure()
-  if not df_d2.empty:
-    acc_col = (
-        'accuracy'
-        if 'accuracy' in df_d2.columns
-        else (df_d2.columns[1] if len(df_d2.columns) > 1 else None)
+    df_d3 = normalizar_coluna_por_grupo(
+        df_d3, 'importancia_absoluta', ['metodo_xai']
     )
-    loss_col = 'loss_validacao' if 'loss_validacao' in df_d2.columns else None
+    df_d3['epoca'] = (
+        pd.to_numeric(df_d3['epoca'], errors='coerce').fillna(0).astype(int)
+    )
 
-    if acc_col and 'epoca' in df_d2.columns:
-      fig_perf.add_trace(
-          go.Scatter(
-              x=df_d2['epoca'],
-              y=df_d2[acc_col],
-              mode='lines+markers',
-              name='Acurácia Validação',
-              line=dict(color='#059669', width=2.5),
+  # Constrói projeção 2D (t-SNE ou PCA) se não houver CSV dedicado
+  if df_proj.empty and not df_d3.empty:
+    col_feat = detectar_coluna_feature(df_d3)
+    df_base_proj = df_d3[df_d3['metodo_xai'] == metodo_alvo].copy()
+    if df_base_proj.empty:
+      df_base_proj = df_d3.copy()
+
+    if col_feat:
+      mat = (
+          df_base_proj.pivot_table(
+              index=['epoca', 'instancia_id'],
+              columns=col_feat,
+              values='importancia_absoluta',
+              fill_value=0.0,
           )
+          .reset_index()
       )
-    if loss_col and 'epoca' in df_d2.columns:
-      fig_perf.add_trace(
-          go.Scatter(
-              x=df_d2['epoca'],
-              y=df_d2[loss_col],
-              mode='lines+markers',
-              name='Loss Validação',
-              yaxis='y2',
-              line=dict(color='#dc2626', width=2.5),
-          )
+      coords = PCA(n_components=2, random_state=42).fit_transform(
+          mat.drop(columns=['epoca', 'instancia_id']).values
       )
+      df_proj = mat[['epoca', 'instancia_id']].copy()
+      df_proj['tsne_dim_1'] = coords[:, 0]
+      df_proj['tsne_dim_2'] = coords[:, 1]
+      df_proj['pca_dim_1'] = coords[:, 0]
+      df_proj['pca_dim_2'] = coords[:, 1]
 
-  fig_perf.update_layout(
-      title=f'Desempenho Preditivo do Modelo - {label_ds}',
-      xaxis=dict(title='Época'),
-      yaxis=dict(title='Acurácia'),
-      yaxis2=dict(
-          title='Loss (Perda)', overlaying='y', side='right', showgrid=False
-      ),
-      margin=dict(t=40, b=40, l=40, r=40),
-      legend=dict(x=0.01, y=0.99, orientation='h'),
-      template='plotly_white',
+  if df_proj.empty:
+    vazio = go.Figure().update_layout(title='Dados espaciais 2D indisponíveis')
+    return vazio, vazio, []
+
+  df_proj['epoca'] = (
+      pd.to_numeric(df_proj['epoca'], errors='coerce').fillna(0).astype(int)
   )
+  df_proj['instancia_id'] = df_proj['instancia_id'].astype(str)
 
-  # ----------------------------------------------------
-  # 2. GRAPH 2: ESTABILIDADE DAS EXPLICAÇÕES
-  # ----------------------------------------------------
-  fig_stab = go.Figure()
-  if not df_d5.empty and 'tipo_metrica' in df_d5.columns:
-    mask_metodo = (
-        df_d5['tipo_metrica'].astype(str).str.upper() == str(metodo_sel).upper()
-    )
-    mask_metrica = (
-        df_d5['metrica'].astype(str).str.lower() == str(metrica_est_sel).lower()
-        if 'metrica' in df_d5.columns
-        else True
-    )
-    df_s_sub = df_d5[mask_metodo & mask_metrica].copy()
-
-    # Normaliza MAD e Variância por método XAI
-    if (
-        not df_s_sub.empty
-        and metrica_est_sel != 'spearman'
-        and 'valor_metrica' in df_s_sub.columns
-    ):
-      s_min = df_s_sub['valor_metrica'].min()
-      s_max = df_s_sub['valor_metrica'].max()
-      if (s_max - s_min) > 1e-12:
-        df_s_sub['valor_metrica'] = (df_s_sub['valor_metrica'] - s_min) / (
-            s_max - s_min
-        )
-
-    if (
-        not df_s_sub.empty
-        and 'epoca_destino' in df_s_sub.columns
-        and 'valor_metrica' in df_s_sub.columns
-    ):
-      fig_stab.add_trace(
-          go.Scatter(
-              x=df_s_sub['epoca_destino'],
-              y=df_s_sub['valor_metrica'],
-              mode='lines+markers',
-              name=f'Estabilidade ({metrica_est_sel.upper()})',
-              line=dict(color='#2563eb', width=2.5, dash='solid'),
-          )
-      )
-  fig_stab.update_layout(
-      title=(
-          'Consistência Temporal'
-          f' ({metodo_sel} - {metrica_est_sel.upper()}) {tag_escala}'
-      ),
-      xaxis=dict(title='Época'),
-      yaxis=dict(title=f'Índice ({metrica_est_sel})'),
-      margin=dict(t=40, b=40, l=40, r=40),
-      legend=dict(x=0.01, y=0.99, orientation='h'),
-      template='plotly_white',
-  )
-
-  # ----------------------------------------------------
-  # 3. HEATMAP DE IMPORTÂNCIA RANKED (NORMALIZADO POR MÉTODO XAI)
-  # ----------------------------------------------------
-  fig_heat = go.Figure()
-  if not df_d4.empty and 'metodo_xai' in df_d4.columns:
-    df_h_all = df_d4.copy()
-    val_col = (
-        'importancia_media'
-        if 'importancia_media' in df_h_all.columns
-        else df_h_all.columns[-1]
-    )
-    df_h_all[val_col] = df_h_all[val_col].abs()
-    df_h_all = normalizar_coluna_por_grupo(df_h_all, val_col, ['metodo_xai'])
-
-    df_h_sub = df_h_all[
-        df_h_all['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()
-    ].copy()
-
-    if not df_h_sub.empty:
-      piv = df_h_sub.pivot_table(
-          index='feature', columns='epoca', values=val_col, fill_value=0
+  if 'metodo_xai' in df_proj.columns:
+    if metodo_alvo in df_proj['metodo_xai'].unique():
+      df_proj = df_proj[df_proj['metodo_xai'] == metodo_alvo].copy()
+    elif metodo_alvo == CODIGO_MEDIA_GERAL:
+      cols_num = [
+          c
+          for c in ['tsne_dim_1', 'tsne_dim_2', 'pca_dim_1', 'pca_dim_2']
+          if c in df_proj.columns
+      ]
+      agg_p = {c: 'mean' for c in cols_num}
+      for c_extra in ['classe_real', 'classe_predita']:
+        if c_extra in df_proj.columns:
+          agg_p[c_extra] = 'first'
+      df_proj = df_proj.groupby(['epoca', 'instancia_id'], as_index=False).agg(
+          agg_p
       )
 
-      if not piv.empty:
-        ultima_coluna = piv.columns[-1]
-        ordem_ranking = piv[ultima_coluna].sort_values(ascending=True).index
-        piv = piv.reindex(ordem_ranking)
+  if algo_sel == 'PCA' and {'pca_dim_1', 'pca_dim_2'}.issubset(df_proj.columns):
+    col_x, col_y = 'pca_dim_1', 'pca_dim_2'
+  elif {'tsne_dim_1', 'tsne_dim_2'}.issubset(df_proj.columns):
+    col_x, col_y = 'tsne_dim_1', 'tsne_dim_2'
+  else:
+    num_cols = df_proj.select_dtypes(include=[np.number]).columns.tolist()
+    num_cols = [c for c in num_cols if c not in ['epoca', 'classe_real', 'classe_predita']]
+    col_x, col_y = num_cols[0], num_cols[1]
 
-        df_ranks = piv.rank(ascending=False, method='min', axis=0)
-        num_features = len(piv)
-
-        custom_text = np.empty((piv.shape[0], piv.shape[1], 2), dtype=object)
-        cols_list = list(piv.columns)
-        for i_feat, feat_name in enumerate(piv.index):
-          for j_ep, ep_val in enumerate(cols_list):
-            rank_atual = int(df_ranks.loc[feat_name, ep_val])
-            if j_ep > 0:
-              ep_ant = cols_list[j_ep - 1]
-              rank_ant = int(df_ranks.loc[feat_name, ep_ant])
-              diff = rank_ant - rank_atual
-              if diff > 0:
-                var_str = f'▲ Subiu {diff} posição(ões)'
-              elif diff < 0:
-                var_str = f'▼ Caiu {abs(diff)} posição(ões)'
-              else:
-                var_str = '▶ Estável'
-            else:
-              var_str = '—'
-
-            custom_text[i_feat, j_ep, 0] = f'{rank_atual}º de {num_features}'
-            custom_text[i_feat, j_ep, 1] = var_str
-
-        fig_heat = go.Figure(
-            data=go.Heatmap(
-                z=piv.values,
-                x=piv.columns,
-                y=piv.index,
-                zmin=0.0,
-                zmax=1.0,
-                customdata=custom_text,
-                colorscale=COLORSCALE_REDS_20,
-                hovertemplate=(
-                    '<b>Época:</b> %{x}<br><b>Feature:</b> %{y}<br><b>Valor XAI'
-                    f':</b>'
-                    ' %{z:.4f}<br>----------------------------------<br><b>Ranking:</b>'
-                    ' %{customdata[0]}<br><b>Evolução:</b>'
-                    ' %{customdata[1]}<extra></extra>'
-                ),
-            )
+  # Enriquece com importância e classes vindas de df_d3
+  if not df_d3.empty:
+    df_imp = (
+        df_d3[df_d3['metodo_xai'] == metodo_alvo]
+        .groupby(['epoca', 'instancia_id'], as_index=False)
+        .agg(
+            importancia_total=('importancia_absoluta', 'sum'),
+            **{
+                c: (c, 'first')
+                for c in ['classe_real', 'classe_predita']
+                if c in df_d3.columns
+            },
         )
-        fig_heat.update_layout(
-            title=f'Heatmap de Importância ({metodo_sel})',
-            margin=dict(t=40, b=30, l=150, r=20),
-            template='plotly_white',
-            yaxis=dict(dtick=1, automargin=True, tickfont=dict(size=10)),
-        )
-
-  instancias_selecionadas_tabela = [
-      str(x) for x in (instancias_selecionadas_store or [])
-  ]
-  instancias_destaque_sankey = []
-
-  df_d3_sankey, df_d2_sankey = carregar_dados_sankey(dataset_sel)
-  df_sankey_processed, _, _ = processar_dados_sankey(
-      df_d3_sankey, df_d2_sankey, dataset_sel, normalizar=True
-  )
-
-  if (
-      triggered_id != 'badge-limpar-sankey'
-      and not instancias_selecionadas_tabela
-      and clickDataSankey
-      and 'points' in clickDataSankey
-      and len(clickDataSankey['points']) > 0
-  ):
-    pt_s = clickDataSankey['points'][0]
-    if 'pointNumber' in pt_s and not df_sankey_processed.empty:
-      flow_idx = pt_s['pointNumber']
-      m_alvo = (
-          metodo_sel
-          if metodo_sel in df_sankey_processed['metodo_xai'].unique()
-          else df_sankey_processed['metodo_xai'].iloc[0]
-      )
-      df_filtered_s = df_sankey_processed[
-          df_sankey_processed['metodo_xai'] == m_alvo
-      ].copy()
-      if epocas_sel:
-        df_filtered_s = df_filtered_s[
-            (df_filtered_s['epoca_origem'] >= epocas_sel[0])
-            & (df_filtered_s['epoca_destino'] <= epocas_sel[1])
-        ]
-      if flow_idx < len(df_filtered_s):
-        row_flow = df_filtered_s.iloc[flow_idx]
-        lista_raw = row_flow['lista_instancias']
-        instancias_destaque_sankey = [str(x) for x in lista_raw]
-
-        if not df_d6.empty and 'classe_predita' in df_d6.columns:
-          df_d6_ep = df_d6[
-              (
-                  df_d6['metodo_xai'].astype(str).str.upper()
-                  == str(m_alvo).upper()
-              )
-              & (df_d6['epoca'] == int(row_flow['epoca_origem']))
-              & (df_d6['classe_predita'] == int(row_flow['classe_origem']))
-          ]
-          valid_ids_set = set(df_d6_ep['instancia_id'].astype(str))
-          instancias_destaque_sankey = [
-              i for i in instancias_destaque_sankey if i in valid_ids_set
-          ]
-
-  if instancias_destaque_sankey and triggered_id != 'badge-limpar-sankey':
-    badge_children = [
-        f'Instâncias do Fluxo Sankey ({len(instancias_destaque_sankey)}) ',
-        html.Span('✕', style={'fontWeight': 'bold', 'marginLeft': '4px'}),
+    )
+    cols_drop = [
+        c
+        for c in ['classe_real', 'classe_predita', 'importancia_total']
+        if c in df_proj.columns and c in df_imp.columns
     ]
-    badge_style = {
-        'cursor': 'pointer',
-        'fontSize': '11px',
-        'padding': '5px 9px',
-        'borderRadius': '12px',
-        'boxShadow': '0 2px 4px rgba(0,0,0,0.1)',
-        'display': 'inline-block',
+    df_proj = df_proj.drop(columns=cols_drop).merge(
+        df_imp, on=['epoca', 'instancia_id'], how='left'
+    )
+
+  if 'classe_real' not in df_proj.columns:
+    df_proj['classe_real'] = 0
+  if 'classe_predita' not in df_proj.columns:
+    df_proj['classe_predita'] = df_proj['classe_real']
+  if 'importancia_total' not in df_proj.columns:
+    df_proj['importancia_total'] = 0.5
+
+  df_proj['classe_real'] = df_proj['classe_real'].fillna(0).astype(int)
+  df_proj['classe_predita'] = df_proj['classe_predita'].fillna(0).astype(int)
+  df_proj['erro_predicao'] = np.where(
+      df_proj['classe_real'] != df_proj['classe_predita'], 'Erro', 'Acerto'
+  )
+
+  ep_alvo = epoca_sel if epoca_sel is not None else int(df_proj['epoca'].max())
+  df_ep = df_proj[df_proj['epoca'] == ep_alvo].copy()
+  if df_ep.empty:
+    df_ep = df_proj.copy()
+
+  if cor_por == 'erro_predicao':
+    df_ep['grupo_cor'] = df_ep['erro_predicao']
+    mapa_cores = {'Acerto': '#10b981', 'Erro': '#ef4444'}
+  elif cor_por == 'classe_real':
+    df_ep['grupo_cor'] = df_ep['classe_real'].map(mapa_classes)
+    mapa_cores = {
+        mapa_classes.get(0, 'Classe 0'): '#3b82f6',
+        mapa_classes.get(1, 'Classe 1'): '#f59e0b',
     }
   else:
-    badge_children = []
-    badge_style = {'display': 'none'}
+    df_ep['grupo_cor'] = df_ep['classe_predita'].map(mapa_classes)
+    mapa_cores = {
+        mapa_classes.get(0, 'Classe 0'): '#3b82f6',
+        mapa_classes.get(1, 'Classe 1'): '#ef4444',
+    }
 
-  # ----------------------------------------------------
-  # 4. REDUÇÃO DE DIMENSIONALIDADE (t-SNE / PCA)
-  # ----------------------------------------------------
-  fig_tsne = go.Figure()
-  if not df_d6.empty:
-    epoca_alvo = (
-        epoca_proj_sel
-        if epoca_proj_sel
-        else (df_d6['epoca'].min() if 'epoca' in df_d6.columns else 1)
-    )
-    df_sub = df_d6[
-        (df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper())
-        & (df_d6['epoca'] == int(epoca_alvo))
-    ].copy()
+  fig_scatter = px.scatter(
+      df_ep,
+      x=col_x,
+      y=col_y,
+      color='grupo_cor',
+      color_discrete_map=mapa_cores,
+      custom_data=['instancia_id', 'importancia_total'],
+      hover_data={
+          'instancia_id': True,
+          'importancia_total': ':.4f',
+          'grupo_cor': True,
+          col_x: ':.2f',
+          col_y: ':.2f',
+      },
+      title=f'Projeção {algo_sel} (Época {ep_alvo}) — {formatar_label_metodo(metodo_alvo)}',
+  )
+  fig_scatter.update_traces(marker=dict(size=8, opacity=0.85))
 
-    if not df_sub.empty:
-      df_sub['instancia_id'] = df_sub['instancia_id'].astype(str)
-      if algo_sel == 'PCA' and not df_d3.empty:
-        df_exp_ep = df_d3[
-            (
-                df_d3['metodo_xai'].astype(str).str.upper()
-                == str(metodo_sel).upper()
-            )
-            & (df_d3['epoca'] == int(epoca_alvo))
-        ].copy()
-        if not df_exp_ep.empty:
-          df_exp_ep['instancia_id'] = df_exp_ep['instancia_id'].astype(str)
-          pivot_pca = df_exp_ep.pivot_table(
-              index='instancia_id', columns='feature', values='valor_atribuicao'
-          ).fillna(0)
-          pca = PCA(n_components=2)
-          res_pca = pca.fit_transform(pivot_pca.values)
-          pca_df = pd.DataFrame(
-              res_pca, index=pivot_pca.index, columns=['dim_1', 'dim_2']
-          ).reset_index()
-          df_sub = df_sub.merge(pca_df, on='instancia_id', how='left')
-          x_col, y_col = 'dim_1', 'dim_2'
-        else:
-          x_col, y_col = 'tsne_dim_1', 'tsne_dim_2'
-      else:
-        x_col, y_col = 'tsne_dim_1', 'tsne_dim_2'
-
-      if cor_proj_sel == 'erro_predicao':
-        df_sub['cor_label'] = df_sub['erro_predicao'].map(
-            {0: 'Acerto', 1: 'Erro'}
-        )
-        fig_tsne = px.scatter(
-            df_sub,
-            x=x_col,
-            y=y_col,
-            color='cor_label',
-            color_discrete_map={'Acerto': '#059669', 'Erro': '#dc2626'},
-            custom_data=[
-                'instancia_id',
-                'classe_real',
-                'classe_predita',
-                'erro_predicao',
-            ],
-        )
-      else:
-        fig_tsne = px.scatter(
-            df_sub,
-            x=x_col,
-            y=y_col,
-            color=cor_proj_sel,
-            color_continuous_scale=COLORSCALE_BLUES_20,
-            custom_data=[
-                'instancia_id',
-                'classe_real',
-                'classe_predita',
-                'erro_predicao',
-            ],
-        )
-        fig_tsne.update_coloraxes(
-            colorbar=dict(tickvals=[0, 1], ticktext=['0', '1'], len=0.8)
-        )
-
-      fig_tsne.update_traces(
-          marker=dict(
-              size=8, opacity=0.85, line=dict(width=0.5, color='#334155')
-          ),
-          hovertemplate=(
-              '<b>Instância ID:</b> #%{customdata[0]}<br><b>Classe Real:</b>'
-              ' %{customdata[1]}<br><b>Classe Predita:</b>'
-              ' %{customdata[2]}<br><b>Erro:</b> %{customdata[3]}<br><b>X:</b>'
-              ' %{x:.3f} | <b>Y:</b> %{y:.3f}<extra></extra>'
-          ),
-      )
-
-      if instancias_destaque_sankey and triggered_id != 'badge-limpar-sankey':
-        df_sankey_pts = df_sub[
-            df_sub['instancia_id'].isin(instancias_destaque_sankey)
-        ]
-        if not df_sankey_pts.empty:
-          fig_tsne.add_trace(
-              go.Scatter(
-                  x=df_sankey_pts[x_col],
-                  y=df_sankey_pts[y_col],
-                  mode='markers',
-                  marker=dict(
-                      size=14,
-                      color='rgba(0,0,0,0)',
-                      line=dict(color='#ec4899', width=2.5),
-                  ),
-                  showlegend=False,
-                  hoverinfo='skip',
-              )
-          )
-
-      if (
-          'ATIVO' in trajetoria_sel
-          and len(instancias_selecionadas_tabela) == 1
-      ):
-        inst_id_traj = instancias_selecionadas_tabela[0]
-        df_traj = df_d6[
-            (
-                df_d6['metodo_xai'].astype(str).str.upper()
-                == str(metodo_sel).upper()
-            )
-            & (df_d6['instancia_id'].astype(str) == inst_id_traj)
-        ].sort_values('epoca')
-        fig_tsne.add_trace(
-            go.Scatter(
-                x=df_traj['tsne_dim_1'],
-                y=df_traj['tsne_dim_2'],
-                mode='lines+markers+text',
-                text=[f'E{ep}' for ep in df_traj['epoca']],
-                textposition='top center',
-                line=dict(color='#f59e0b', width=3, dash='dash'),
-                marker=dict(size=12, color='#f59e0b', symbol='diamond'),
-                name=f'Trajetória ID #{inst_id_traj}',
-            )
-        )
-
-      if instancias_selecionadas_tabela:
-        pontos_clicados = df_sub[
-            df_sub['instancia_id'].isin(instancias_selecionadas_tabela)
-        ]
-        if not pontos_clicados.empty:
-          fig_tsne.add_trace(
-              go.Scatter(
-                  x=pontos_clicados[x_col],
-                  y=pontos_clicados[y_col],
-                  mode='markers',
-                  marker=dict(
-                      size=18,
-                      color='rgba(0,0,0,0)',
-                      line=dict(color='#eab308', width=3),
-                  ),
-                  showlegend=False,
-                  hoverinfo='skip',
-              )
-          )
-
-      fig_tsne.update_layout(
-          title=(
-              f'Espaço 2D ({algo_sel}) - Época {epoca_alvo} ({metodo_sel}) -'
-              f' {label_ds}'
-          ),
-          xaxis=dict(showticklabels=False, title=''),
-          yaxis=dict(showticklabels=False, title=''),
-          margin=dict(l=20, r=20, t=40, b=20),
-          template='plotly_white',
-          dragmode='select',
-          clickmode='event+select',
-      )
-
-  # ----------------------------------------------------
-  # 5. BOXPLOT AUXILIAR TEMPORAL
-  # ----------------------------------------------------
-  fig_dim_aux = go.Figure()
-  if not df_d6.empty and 'tsne_dim_1' in df_d6.columns:
-    df_aux_sub = df_d6[
-        df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()
-    ].copy()
-    if not df_aux_sub.empty and 'epoca' in df_aux_sub.columns:
-      df_aux_sub['instancia_id'] = df_aux_sub['instancia_id'].astype(str)
-      custom_box_data = np.array(df_aux_sub['instancia_id']).reshape(-1, 1)
-
-      fig_dim_aux = go.Figure(
-          data=go.Box(
-              x=df_aux_sub['epoca'],
-              y=df_aux_sub['tsne_dim_1'],
-              customdata=custom_box_data,
-              name='Dim 1 (t-SNE)',
-              marker_color='#6366f1',
-              boxpoints='outliers',
-              hovertemplate=(
-                  '<b>Instância ID:</b> #%{customdata[0]}<br><b>Época:</b>'
-                  ' %{x}<br><b>t-SNE Dim 1:</b> %{y:.4f}<extra></extra>'
-              ),
-          )
-      )
-      fig_dim_aux.update_layout(
-          title='Dispersão Temporal (t-SNE Dim 1)',
-          margin=dict(l=20, r=20, t=30, b=20),
-          template='plotly_white',
-      )
-
-  # ----------------------------------------------------
-  # 6. SANKEY TEMPORAL DE EXPLICAÇÕES
-  # ----------------------------------------------------
-  fig_sankey = go.Figure()
-  if not df_sankey_processed.empty:
-    metodos_validos = df_sankey_processed['metodo_xai'].unique()
-    m_alvo = (
-        metodo_sel
-        if metodo_sel in metodos_validos
-        else metodos_validos[0]
-    )
-    df_filtered = df_sankey_processed[
-        df_sankey_processed['metodo_xai'] == m_alvo
-    ].copy()
-
-    if epocas_sel:
-      df_filtered = df_filtered[
-          (df_filtered['epoca_origem'] >= epocas_sel[0])
-          & (df_filtered['epoca_destino'] <= epocas_sel[1])
-      ]
-
-    if not df_filtered.empty:
-      epocas_unicas = sorted(
-          list(
-              set(df_filtered['epoca_origem']).union(
-                  set(df_filtered['epoca_destino'])
-              )
-          )
-      )
-      classes_unicas = [0, 1]
-
-      node_labels, node_x, node_y = [], [], []
-      node_dict = {}
-
-      for i_ep, ep in enumerate(epocas_unicas):
-        for i_cl, cl in enumerate(classes_unicas):
-          node_id = len(node_labels)
-          node_dict[f'E{ep}_C{cl}'] = node_id
-          nome_classe = map_cls.get(cl, f'Classe {cl}')
-          node_labels.append(f'Época {ep}<br>{nome_classe}')
-          x_pos = 0.05 + 0.9 * (i_ep / max(1, len(epocas_unicas) - 1))
-          y_pos = 0.2 if cl == 0 else 0.8
-          node_x.append(x_pos)
-          node_y.append(y_pos)
-
-      sources, targets, values, link_colors, hover_texts = [], [], [], [], []
-      for _, row in df_filtered.iterrows():
-        src_key = f"E{row['epoca_origem']}_C{row['classe_origem']}"
-        tgt_key = f"E{row['epoca_destino']}_C{row['classe_destino']}"
-
-        if src_key in node_dict and tgt_key in node_dict:
-          sources.append(node_dict[src_key])
-          targets.append(node_dict[tgt_key])
-          val_fluxo = int(row['qtd_instancias'])
-          values.append(val_fluxo)
-
-          conf = float(row['confianca_media'])
-          alpha = max(0.30, min(0.85, conf))
-
-          if cor_sankey_sel == 'classe':
-            base_rgb = (
-                '37, 99, 235' if row['classe_origem'] == 0 else '249, 115, 22'
-            )
-          elif cor_sankey_sel == 'confianca':
-            base_rgb = f'{int(255*(1-conf))}, {int(200*conf)}, 150'
-          else:
-            err = float(row['taxa_erro'])
-            base_rgb = f'{int(255*err)}, 50, 50'
-
-          link_colors.append(f'rgba({base_rgb}, {alpha:.2f})')
-
-          hover_text = (
-              f'<b>Dataset:</b> {dataset_sel.upper()}<br><b>Método XAI:</b>'
-              f' {m_alvo}<br><b>Transição:</b> Época {row["epoca_origem"]}'
-              f' &rarr; Época {row["epoca_destino"]}<br><b>Classe Predita:</b>'
-              f' {map_cls.get(row["classe_origem"])} &rarr;'
-              f' {map_cls.get(row["classe_destino"])}<br><b>Classe Real'
-              ' Dominante:</b>'
-              f' {map_cls.get(row["classe_real_dominante"])}<br><b>Qtd'
-              f' Instâncias:</b> {row["qtd_instancias"]}<br><b>Exemplo ID:</b>'
-              f' #{row["exemplo_instancia"]}<br><b>Confiança Média:</b>'
-              f' {conf*100:.1f}%<br><b>Taxa Erro Média:</b>'
-              f' {row["taxa_erro"]*100:.1f}%<br><b>Importância Média XAI'
-              f' :</b> {row["importancia_media"]:.4f}'
-          )
-          hover_texts.append(hover_text)
-
-      fig_sankey = go.Figure(
-          data=[
-              go.Sankey(
-                  arrangement='snap',
-                  node=dict(
-                      pad=30,
-                      thickness=20,
-                      line=dict(color='#334155', width=0.5),
-                      label=node_labels,
-                      x=node_x,
-                      y=node_y,
-                      color='#e2e8f0',
-                  ),
-                  link=dict(
-                      source=sources,
-                      target=targets,
-                      value=values,
-                      color=link_colors,
-                      customdata=hover_texts,
-                      hovertemplate='%{customdata}<extra></extra>',
-                  ),
-              )
-          ]
-      )
-      fig_sankey.update_layout(
-          title_text=(
-              f'Transições Temporais de Explicações ({m_alvo}) - {label_ds}'
-          ),
-          font_size=12,
-          margin=dict(l=20, r=20, t=50, b=20),
-          template='plotly_white',
-      )
-
-  # ----------------------------------------------------
-  # 7. MATRIZ DE CONFUSÃO
-  # ----------------------------------------------------
-  fig_cm = go.Figure()
-  epoca_alvo_val = epoca_proj_sel if epoca_proj_sel else 1
-  if not df_d6.empty:
-    df_ep_val = df_d6[df_d6['epoca'] == int(epoca_alvo_val)].copy()
-    if (
-        not df_ep_val.empty
-        and 'classe_real' in df_ep_val.columns
-        and 'classe_predita' in df_ep_val.columns
-    ):
-      y_true = df_ep_val['classe_real'].astype(int)
-      y_pred = df_ep_val['classe_predita'].astype(int)
-      cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
-
-      labels_cls = [map_cls.get(0, 'Classe 0'), map_cls.get(1, 'Classe 1')]
-
-      fig_cm = px.imshow(
-          cm,
-          text_auto=True,
-          x=labels_cls,
-          y=labels_cls,
-          color_continuous_scale='Blues',
-          labels=dict(x='Classe Predita', y='Classe Real', color='Frequência'),
-      )
-      fig_cm.update_layout(
-          title=f'Matriz de Confusão (Época {epoca_alvo_val})',
-          margin=dict(t=40, b=30, l=60, r=20),
-          template='plotly_white',
-      )
-
-  # ----------------------------------------------------
-  # 8. MÉTRICAS DE CLASSIFICAÇÃO
-  # ----------------------------------------------------
-  fig_class_metrics = go.Figure()
-  if not df_d6.empty:
-    df_ep_val = df_d6[df_d6['epoca'] == int(epoca_alvo_val)].copy()
-    if (
-        not df_ep_val.empty
-        and 'classe_real' in df_ep_val.columns
-        and 'classe_predita' in df_ep_val.columns
-    ):
-      y_true = df_ep_val['classe_real'].astype(int)
-      y_pred = df_ep_val['classe_predita'].astype(int)
-
-      p, r, f1, _ = precision_recall_fscore_support(
-          y_true, y_pred, average=None, labels=[0, 1], zero_division=0
-      )
-      try:
-        auc = roc_auc_score(y_true, y_pred)
-      except Exception:
-        auc = 0.5
-
-      categories = ['Precision', 'Recall', 'F1-Score']
-      fig_class_metrics.add_trace(
-          go.Bar(
-              name=map_cls.get(0, 'Classe 0'),
-              x=categories,
-              y=[p[0], r[0], f1[0]],
-              marker_color='#3b82f6',
-          )
-      )
-      fig_class_metrics.add_trace(
-          go.Bar(
-              name=map_cls.get(1, 'Classe 1'),
-              x=categories,
-              y=[p[1], r[1], f1[1]],
-              marker_color='#f97316',
+  # Trajetória temporal das instâncias selecionadas
+  if toggle_trajetoria and 'ATIVO' in toggle_trajetoria and insts_selecionadas:
+    df_traj = df_proj[
+        df_proj['instancia_id'].isin([str(i) for i in insts_selecionadas])
+    ].sort_values('epoca')
+    for inst_id, grp in df_traj.groupby('instancia_id'):
+      fig_scatter.add_trace(
+          go.Scatter(
+              x=grp[col_x],
+              y=grp[col_y],
+              mode='lines+markers',
+              name=f'Traj. {inst_id}',
+              line=dict(width=1.5, dash='dot'),
+              marker=dict(size=5),
+              showlegend=False,
           )
       )
 
-      fig_class_metrics.update_layout(
-          title=(
-              f'Métricas por Classe (Época {epoca_alvo_val}) | AUC-ROC:'
-              f' {auc:.3f}'
-          ),
-          barmode='group',
-          yaxis=dict(range=[0, 1.05], title='Score'),
-          margin=dict(t=40, b=30, l=40, r=20),
-          template='plotly_white',
-      )
-
-  # ----------------------------------------------------
-  # 9. DISTRIBUIÇÃO DOS ERROS DE PREDIÇÃO
-  # ----------------------------------------------------
-  fig_err_dist = go.Figure()
-  if not df_d6.empty and 'erro_predicao' in df_d6.columns:
-    df_d6_copy = df_d6.copy()
-    df_d6_copy['status_pred'] = df_d6_copy['erro_predicao'].map(
-        {0: 'Acerto', 1: 'Erro'}
-    )
-
-    df_err_summary = (
-        df_d6_copy.groupby(['epoca', 'classe_real', 'status_pred'])
-        .size()
-        .reset_index(name='contagem')
-    )
-    df_err_summary['nome_classe'] = df_err_summary['classe_real'].map(map_cls)
-
-    fig_err_dist = px.bar(
-        df_err_summary,
-        x='epoca',
-        y='contagem',
-        color='status_pred',
-        facet_col='nome_classe',
-        color_discrete_map={'Acerto': '#059669', 'Erro': '#dc2626'},
-        labels={
-            'contagem': 'Qtd Instâncias',
-            'epoca': 'Época',
-            'status_pred': 'Resultado',
-        },
-    )
-    fig_err_dist.update_layout(
-        title='Evolução da Distribuição de Erros x Acertos por Classe Real',
-        margin=dict(t=40, b=30, l=40, r=20),
-        template='plotly_white',
-    )
-
-  return (
-      fig_perf,
-      fig_stab,
-      fig_heat,
-      fig_tsne,
-      fig_dim_aux,
-      fig_sankey,
-      fig_cm,
-      fig_class_metrics,
-      fig_err_dist,
-      badge_children,
-      badge_style,
+  fig_scatter.update_layout(
+      margin=dict(l=40, r=20, t=45, b=40),
+      legend_title_text='',
   )
 
+  # Boxplot Auxiliar Temporal por Época
+  df_box = df_proj.copy()
+  if insts_selecionadas:
+    df_box_sub = df_box[
+        df_box['instancia_id'].isin([str(i) for i in insts_selecionadas])
+    ]
+    if not df_box_sub.empty:
+      df_box = df_box_sub
 
-# CALLBACK TABELA
+  fig_box = px.box(
+      df_box,
+      x='epoca',
+      y='importancia_total',
+      color_discrete_sequence=[CORES_METODOS_XAI.get(metodo_alvo, '#2563eb')],
+      title=f'Distribuição Temporal da Importância — {formatar_label_metodo(metodo_alvo)}',
+  )
+  fig_box.update_layout(
+      xaxis_title='Época',
+      yaxis_title='Importância Agregada (Norm.)',
+      margin=dict(l=45, r=20, t=45, b=40),
+  )
+
+  # Dados para a tabela auxiliar
+  df_tab = df_ep.copy()
+  if insts_selecionadas:
+    df_tab_sub = df_tab[
+        df_tab['instancia_id'].isin([str(i) for i in insts_selecionadas])
+    ]
+    if not df_tab_sub.empty:
+      df_tab = df_tab_sub
+
+  df_tab['metodo_xai'] = formatar_label_metodo(metodo_alvo)
+  df_tab['classe_real'] = df_tab['classe_real'].map(mapa_classes)
+  df_tab['classe_predita'] = df_tab['classe_predita'].map(mapa_classes)
+  df_tab['tsne_dim_1'] = df_tab[col_x].round(4)
+  df_tab['tsne_dim_2'] = df_tab[col_y].round(4)
+
+  colunas_tabela = [
+      'instancia_id',
+      'epoca',
+      'metodo_xai',
+      'classe_real',
+      'classe_predita',
+      'erro_predicao',
+      'tsne_dim_1',
+      'tsne_dim_2',
+  ]
+  dados_tabela = df_tab[colunas_tabela].head(200).to_dict('records')
+
+  return fig_scatter, fig_box, dados_tabela
+
+
 @app.callback(
-    Output('dim-tabela-instancias', 'data'),
     [
-        Input('store-instancias-selecionadas', 'data'),
+        Output('performance-graph', 'figure'),
+        Output('confusion-matrix-graph', 'figure'),
+        Output('validation-metrics-graph', 'figure'),
+    ],
+    [
         Input('dropdown-dataset', 'value'),
-        Input('dropdown-metodo', 'value'),
         Input('dim-dropdown-epoca', 'value'),
-        Input('dim-dropdown-algo', 'value'),
     ],
 )
-def update_table_from_store(
-    instancias_selecionadas, dataset_sel, metodo_sel, epoca_proj_sel, algo_sel
-):
-  df_d6 = carregar_csv_seguro('projecao_tsne_epocas', dataset_sel)
-  df_d3 = carregar_csv_seguro('explicacoes_instancias', dataset_sel)
-  if df_d6.empty:
-    return []
+def atualizar_validacao_modelo(dataset_sel, epoca_sel):
+  df_d3, df_d2 = carregar_dados_sankey(dataset_sel)
+  mapa_classes = Mapeamento_classes_dataset(dataset_sel)
 
-  epoca_alvo = (
-      epoca_proj_sel
-      if epoca_proj_sel
-      else (df_d6['epoca'].min() if 'epoca' in df_d6.columns else 1)
+  if df_d2.empty:
+    vazio = go.Figure().update_layout(
+        title='Métricas de validação indisponíveis'
+    )
+    return vazio, vazio, vazio
+
+  df_d2 = df_d2.copy()
+  df_d2['epoca'] = (
+      pd.to_numeric(df_d2['epoca'], errors='coerce').fillna(0).astype(int)
   )
-  df_sub = df_d6[
-      (df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper())
-      & (pd.to_numeric(df_d6['epoca'], errors='coerce') == int(epoca_alvo))
-  ].copy()
+  df_d2 = df_d2.sort_values('epoca')
 
-  if df_sub.empty:
-    return []
+  ep_alvo = epoca_sel if epoca_sel is not None else int(df_d2['epoca'].max())
 
-  df_sub['instancia_id'] = df_sub['instancia_id'].astype(str)
+  # 1. Gráfico de Performance (Acurácia & Loss)
+  fig_perf = go.Figure()
+  if 'accuracy' in df_d2.columns:
+    fig_perf.add_trace(
+        go.Scatter(
+            x=df_d2['epoca'],
+            y=df_d2['accuracy'],
+            mode='lines+markers',
+            name='Acurácia',
+            line=dict(color='#16a34a', width=2.5),
+        )
+    )
+  if 'loss_validacao' in df_d2.columns:
+    fig_perf.add_trace(
+        go.Scatter(
+            x=df_d2['epoca'],
+            y=df_d2['loss_validacao'],
+            mode='lines+markers',
+            name='Loss Validação',
+            yaxis='y2',
+            line=dict(color='#dc2626', width=2.5, dash='dash'),
+        )
+    )
 
-  if algo_sel == 'PCA' and not df_d3.empty:
-    df_exp = df_d3[
-        (df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper())
-        & (pd.to_numeric(df_d3['epoca'], errors='coerce') == int(epoca_alvo))
-    ].copy()
-    if not df_exp.empty:
-      df_exp['instancia_id'] = df_exp['instancia_id'].astype(str)
-      pivot = df_exp.pivot_table(
-          index='instancia_id',
-          columns='feature',
-          values='valor_atribuicao',
-          fill_value=0,
+  fig_perf.add_vline(
+      x=ep_alvo,
+      line_width=1.5,
+      line_dash='dot',
+      line_color='#334155',
+      annotation_text=f'Época {ep_alvo}',
+  )
+  fig_perf.update_layout(
+      xaxis_title='Época',
+      yaxis=dict(title='Acurácia', range=[0, 1.05]),
+      yaxis2=dict(title='Loss', overlaying='y', side='right'),
+      legend=dict(orientation='h', y=1.12, x=0),
+      margin=dict(l=50, r=50, t=45, b=40),
+      hovermode='x unified',
+  )
+
+  # 2. Matriz de Confusão na Época Selecionada
+  cm = np.array([[0, 0], [0, 0]])
+  if (
+      not df_d3.empty
+      and {'classe_real', 'classe_predita', 'epoca'}.issubset(df_d3.columns)
+  ):
+    df_ep_inst = (
+        df_d3[df_d3['epoca'] == ep_alvo]
+        .drop_duplicates(subset=['instancia_id'])
+    )
+    if not df_ep_inst.empty:
+      cm = confusion_matrix(
+          df_ep_inst['classe_real'].astype(int),
+          df_ep_inst['classe_predita'].astype(int),
+          labels=[0, 1],
       )
-      if len(pivot) >= 2 and pivot.shape[1] >= 2:
-        pca = PCA(n_components=2)
-        resultado = pca.fit_transform(pivot.values)
-        pca_df = pd.DataFrame(resultado, columns=['dim_1', 'dim_2'])
-        pca_df['instancia_id'] = pivot.index.astype(str)
-        df_sub = df_sub.merge(pca_df, on='instancia_id', how='inner')
 
-  if instancias_selecionadas and len(instancias_selecionadas) > 0:
-    inst_str_list = [str(x) for x in instancias_selecionadas]
-    df_tabela = df_sub[df_sub['instancia_id'].isin(inst_str_list)]
-  else:
-    df_tabela = df_sub
+  labels_cls = [
+      mapa_classes.get(0, 'Classe 0'),
+      mapa_classes.get(1, 'Classe 1'),
+  ]
+  fig_cm = go.Figure(
+      data=go.Heatmap(
+          z=cm,
+          x=labels_cls,
+          y=labels_cls,
+          text=cm,
+          texttemplate='%{text}',
+          textfont=dict(size=18),
+          colorscale=COLORSCALE_BLUES_20,
+          showscale=False,
+      )
+  )
+  fig_cm.update_layout(
+      title=dict(
+          text=f'Matriz de Confusão — Época {ep_alvo}',
+          font=dict(size=13, color='#1e293b'),
+      ),
+      xaxis_title='Classe Predita',
+      yaxis_title='Classe Real',
+      yaxis=dict(autorange='reversed'),
+      margin=dict(l=80, r=30, t=45, b=50),
+  )
 
-  return df_tabela.to_dict('records')
+  # 3. Métricas Secundárias (Precision, Recall, F1, ROC-AUC)
+  fig_met = go.Figure()
+  metricas_candidatas = [
+      ('precision', 'Precision', '#2563eb'),
+      ('recall', 'Recall', '#9333ea'),
+      ('f1_score', 'F1-Score', '#ea580c'),
+      ('roc_auc', 'ROC-AUC', '#0d9488'),
+  ]
+  for col_m, label_m, cor_m in metricas_candidatas:
+    if col_m in df_d2.columns:
+      fig_met.add_trace(
+          go.Scatter(
+              x=df_d2['epoca'],
+              y=df_d2[col_m],
+              mode='lines+markers',
+              name=label_m,
+              line=dict(color=cor_m, width=2),
+          )
+      )
+
+  if not fig_met.data and 'accuracy' in df_d2.columns:
+    fig_met.add_trace(
+        go.Scatter(
+            x=df_d2['epoca'],
+            y=df_d2['accuracy'],
+            mode='lines+markers',
+            name='Accuracy',
+            line=dict(color='#2563eb', width=2),
+        )
+    )
+
+  fig_met.add_vline(
+      x=ep_alvo, line_width=1.5, line_dash='dot', line_color='#334155'
+  )
+  fig_met.update_layout(
+      xaxis_title='Época',
+      yaxis=dict(title='Score', range=[0, 1.05]),
+      legend=dict(orientation='h', y=1.12, x=0),
+      margin=dict(l=50, r=20, t=45, b=40),
+      hovermode='x unified',
+  )
+
+  return fig_perf, fig_cm, fig_met
 
 
 if __name__ == '__main__':
-  app.run(debug=False)
+  app.run(debug=True)
