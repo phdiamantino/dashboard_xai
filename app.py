@@ -40,12 +40,8 @@ PALETA_METODOS = [
 ]
 COR_COMBINADO = '#111827'
 
-# Nome oficial da coluna com o VALOR ORIGINAL da feature no CSV de explicações
-# (usada na cor do beeswarm). Se None, o código tenta detectar a coluna nos
-# dados crus (antes da normalização). Se souber o nome, preencha aqui.
-COL_VALOR_FEATURE = None
+COL_VALOR_FEATURE = 'valor_feature'
 
-# Colunas já conhecidas pelo dashboard (ignoradas na detecção automática)
 COLUNAS_CONHECIDAS = {
     'metodo_xai',
     'epoca',
