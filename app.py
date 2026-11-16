@@ -28,6 +28,18 @@ DRIVE_FILE_ID = '125OsCXEBfGhiLNXyjBULAJKKbVvUNr7Q'
 METODO_COMBINADO = 'MEDIA_GERAL'
 LABEL_COMBINADO = 'MÉDIA GERAL (todos os XAI)'
 
+# Paleta usada no gráfico de estabilidade (um método por cor)
+PALETA_METODOS = [
+    '#2563eb',
+    '#f97316',
+    '#059669',
+    '#a855f7',
+    '#e11d48',
+    '#0891b2',
+    '#ca8a04',
+]
+COR_COMBINADO = '#111827'
+
 
 def preparar_dados():
   if not glob.glob('**/*.csv', recursive=True):
@@ -804,17 +816,6 @@ SIDEBAR = dbc.Col(
                     'classe_predita',
                     '10px',
                 ),
-                html.Div(
-                    [
-                        dcc.Checklist(
-                            id='dim-toggle-trajetoria',
-                            options=[{'label': ' Trajetória', 'value': 'ATIVO'}],
-                            value=[],
-                            style={'fontSize': '11px', 'color': '#334155'},
-                        )
-                    ],
-                    style={'marginTop': '5px'},
-                ),
             ],
             style={
                 'backgroundColor': '#ffffff',
@@ -1242,7 +1243,6 @@ def gerenciar_estado_selecao(
         Input('dim-dropdown-epoca', 'value'),
         Input('dim-dropdown-algo', 'value'),
         Input('dim-dropdown-cor', 'value'),
-        Input('dim-toggle-trajetoria', 'value'),
         Input('store-instancias-selecionadas', 'data'),
         Input('sankey-graph', 'clickData'),
         Input('badge-limpar-sankey', 'n_clicks'),
@@ -1257,7 +1257,6 @@ def update_all_graphs(
     epoca_proj_sel,
     algo_sel,
     cor_proj_sel,
-    trajetoria_sel,
     instancias_selecionadas_store,
     clickDataSankey,
     btn_badge_clicks,
@@ -1279,13 +1278,12 @@ def update_all_graphs(
   map_cls = Mapeamento_classes_dataset(dataset_sel)
 
   is_comb = metodo_sel == METODO_COMBINADO
-  metodo_label = LABEL_COMBINADO if is_comb else str(metodo_sel)
 
   if not df_d3.empty and 'metodo_xai' in df_d3.columns:
-    metodos_xai = [
+    metodos_xai = sorted(
         str(m) for m in df_d3['metodo_xai'].dropna().unique()
         if str(m) != METODO_COMBINADO
-    ]
+    )
   else:
     metodos_xai = []
 
@@ -1331,9 +1329,13 @@ def update_all_graphs(
   fig_perf.update_layout(
       title=f'Desempenho Preditivo do Modelo - {label_ds}',
       xaxis=dict(title='Época'),
-      yaxis=dict(title='Acurácia'),
+      yaxis=dict(title='Acurácia', rangemode='tozero'),
       yaxis2=dict(
-          title='Loss (Perda)', overlaying='y', side='right', showgrid=False
+          title='Loss (Perda)',
+          overlaying='y',
+          side='right',
+          showgrid=False,
+          rangemode='tozero',
       ),
       margin=dict(t=40, b=40, l=40, r=40),
       legend=dict(x=0.01, y=0.99, orientation='h'),
@@ -1342,33 +1344,61 @@ def update_all_graphs(
 
   # ----------------------------------------------------
   # 2. GRAPH 2: ESTABILIDADE DAS EXPLICAÇÕES
+  #    Todas as linhas XAI + destaque para o método selecionado
   # ----------------------------------------------------
   fig_stab = go.Figure()
-  df_s_sub = serie_estabilidade(df_d5, metodo_sel, metrica_est_sel, metodos_xai)
-  if (
-      not df_s_sub.empty
-      and 'epoca_destino' in df_s_sub.columns
-      and 'valor_metrica' in df_s_sub.columns
-  ):
+
+  cores_metodos = {
+      m: PALETA_METODOS[i % len(PALETA_METODOS)]
+      for i, m in enumerate(metodos_xai)
+  }
+  cores_metodos[METODO_COMBINADO] = COR_COMBINADO
+
+  linhas_estab = [(m, str(m).upper()) for m in metodos_xai]
+  linhas_estab.append((METODO_COMBINADO, 'MÉDIA GERAL'))
+  # Método selecionado por último => desenhado por cima das demais
+  linhas_estab.sort(key=lambda t: t[0] == metodo_sel)
+
+  for m_key, m_nome in linhas_estab:
+    df_m = serie_estabilidade(df_d5, m_key, metrica_est_sel, metodos_xai)
+    if (
+        df_m.empty
+        or 'epoca_destino' not in df_m.columns
+        or 'valor_metrica' not in df_m.columns
+    ):
+      continue
+    df_m = df_m.sort_values('epoca_destino')
+    destaque = m_key == metodo_sel
     fig_stab.add_trace(
         go.Scatter(
-            x=df_s_sub['epoca_destino'],
-            y=df_s_sub['valor_metrica'],
+            x=df_m['epoca_destino'],
+            y=df_m['valor_metrica'],
             mode='lines+markers',
-            name=f'Estabilidade ({metrica_est_sel.upper()})',
-            line=dict(color='#2563eb', width=2.5, dash='solid'),
+            name=f'{m_nome} ★' if destaque else m_nome,
+            opacity=1.0 if destaque else 0.45,
+            line=dict(
+                color=cores_metodos.get(m_key, '#64748b'),
+                width=4.5 if destaque else 1.5,
+                dash='dot' if m_key == METODO_COMBINADO else 'solid',
+            ),
+            marker=dict(size=8 if destaque else 4),
+            hovertemplate=(
+                f'<b>{m_nome}</b><br><b>Época:</b> %{{x}}<br>'
+                f'<b>{metrica_est_sel}:</b> %{{y:.4f}}<extra></extra>'
+            ),
         )
     )
+
   fig_stab.update_layout(
       title=(
           'Consistência Temporal'
-          f' ({"MÉDIA GERAL" if is_comb else metodo_sel} -'
-          f' {metrica_est_sel.upper()})'
+          f' ({metrica_est_sel.upper()}) - Destaque:'
+          f' {"MÉDIA GERAL" if is_comb else str(metodo_sel).upper()}'
       ),
       xaxis=dict(title='Época'),
-      yaxis=dict(title=f'Índice ({metrica_est_sel})'),
-      margin=dict(t=40, b=40, l=40, r=40),
-      legend=dict(x=0.01, y=0.99, orientation='h'),
+      yaxis=dict(title=f'Índice ({metrica_est_sel})', rangemode='tozero'),
+      margin=dict(t=40, b=70, l=40, r=40),
+      legend=dict(x=0.5, y=-0.2, xanchor='center', orientation='h'),
       template='plotly_white',
   )
 
@@ -1638,31 +1668,6 @@ def update_all_graphs(
               )
           )
 
-      if (
-          'ATIVO' in trajetoria_sel
-          and len(instancias_selecionadas_tabela) == 1
-      ):
-        inst_id_traj = instancias_selecionadas_tabela[0]
-        df_traj = df_d6[
-            (
-                df_d6['metodo_xai'].astype(str).str.upper()
-                == str(metodo_sel).upper()
-            )
-            & (df_d6['instancia_id'].astype(str) == inst_id_traj)
-        ].sort_values('epoca')
-        fig_tsne.add_trace(
-            go.Scatter(
-                x=df_traj['tsne_dim_1'],
-                y=df_traj['tsne_dim_2'],
-                mode='lines+markers+text',
-                text=[f'E{int(ep)}' for ep in df_traj['epoca']],
-                textposition='top center',
-                line=dict(color='#f59e0b', width=3, dash='dash'),
-                marker=dict(size=12, color='#f59e0b', symbol='diamond'),
-                name=f'Trajetória ID #{inst_id_traj}',
-            )
-        )
-
       if instancias_selecionadas_tabela:
         pontos_clicados = df_sub[
             df_sub['instancia_id'].isin(instancias_selecionadas_tabela)
@@ -1683,6 +1688,8 @@ def update_all_graphs(
               )
           )
 
+      # Eixos do espaço 2D são coordenadas arbitrárias (com valores negativos):
+      # não forçamos o início em 0 para não distorcer/ocultar pontos.
       fig_tsne.update_layout(
           title=(
               f'Espaço 2D ({algo_label}) - Época {epoca_alvo}'
@@ -1726,6 +1733,7 @@ def update_all_graphs(
       )
       fig_dim_aux.update_layout(
           title=f'Dispersão Temporal ({nome_dim})',
+          yaxis=dict(rangemode='tozero'),
           margin=dict(l=20, r=20, t=30, b=20),
           template='plotly_white',
       )
@@ -1876,6 +1884,7 @@ def update_all_graphs(
           x=labels_cls,
           y=labels_cls,
           color_continuous_scale='Blues',
+          zmin=0,
           labels=dict(x='Classe Predita', y='Classe Real', color='Frequência'),
       )
       fig_cm.update_layout(
@@ -1965,6 +1974,7 @@ def update_all_graphs(
             'status_pred': 'Resultado',
         },
     )
+    fig_err_dist.update_yaxes(rangemode='tozero')
     fig_err_dist.update_layout(
         title='Evolução da Distribuição de Erros x Acertos por Classe Real',
         margin=dict(t=40, b=30, l=40, r=20),
