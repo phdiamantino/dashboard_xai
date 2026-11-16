@@ -40,6 +40,19 @@ PALETA_METODOS = [
 ]
 COR_COMBINADO = '#111827'
 
+# Possíveis nomes da coluna com o valor ORIGINAL da feature (usada na cor do
+# beeswarm). Se nenhuma existir, a cor passa a representar |atribuição|.
+COLS_VALOR_FEATURE = [
+    'valor_feature',
+    'feature_value',
+    'valor_original',
+    'valor_instancia',
+    'valor_real',
+]
+
+# Máximo de features exibidas no beeswarm
+MAX_FEATURES_BEESWARM = 15
+
 
 def preparar_dados():
   if not glob.glob('**/*.csv', recursive=True):
@@ -83,6 +96,9 @@ COLORSCALE_BLUES_20 = [
     [0.75, 'rgb(33, 113, 181)'],
     [1.0, 'rgb(8, 48, 107)'],
 ]
+
+# Escala azul -> vermelho no estilo do beeswarm do SHAP
+COLORSCALE_BEESWARM = [[0.0, '#008bfb'], [1.0, '#ff0051']]
 
 # ==========================================
 # 1. MAPEAMENTO, NORMALIZAÇÃO E CARREGAMENTO
@@ -367,6 +383,206 @@ def serie_estabilidade(df_d5, metodo_sel, metrica_sel, metodos_xai):
   return _prep(df_m)
 
 
+# ------------------------------------------
+# BEESWARM (estilo SHAP) EM PLOTLY
+# ------------------------------------------
+def _jitter_beeswarm(x, n_bins=30, largura_max=0.38):
+  """Deslocamento vertical (jitter) proporcional à densidade local de x."""
+  x = np.asarray(x, dtype=float)
+  n = len(x)
+  y = np.zeros(n)
+  if n == 0:
+    return y
+
+  amplitude = np.ptp(x)
+  if amplitude < 1e-12:
+    bins = np.zeros(n, dtype=int)
+  else:
+    bins = np.minimum(
+        ((x - x.min()) / amplitude * n_bins).astype(int), n_bins - 1
+    )
+
+  rng = np.random.RandomState(0)
+  for b in np.unique(bins):
+    idx = np.where(bins == b)[0]
+    k = len(idx)
+    if k == 1:
+      continue
+    offs = np.arange(k) - (k - 1) / 2.0
+    offs = offs / ((k - 1) / 2.0) * min(largura_max, 0.015 * k)
+    y[idx] = offs[rng.permutation(k)]
+  return y
+
+
+def construir_beeswarm(
+    df_d3, metodo_sel, epoca_alvo, selecionadas, label_metodo, label_ds
+):
+  """Beeswarm das atribuições XAI por feature para um método e uma época.
+
+  - Eixo Y: features ordenadas por média de |atribuição| (mais importante no
+    topo).
+  - Eixo X: valor de atribuição de cada instância (sinal = direção do efeito).
+  - Cor: valor original da feature (baixo -> alto), se existir coluna para
+    isso; caso contrário, |atribuição|.
+  """
+  fig = go.Figure()
+  titulo = f'Beeswarm de Atribuições XAI - {label_metodo} - Época {epoca_alvo}'
+
+  def _vazio(msg):
+    fig.update_layout(
+        title=titulo,
+        annotations=[dict(
+            text=msg, x=0.5, y=0.5, xref='paper', yref='paper',
+            showarrow=False,
+        )],
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        template='plotly_white',
+    )
+    return fig
+
+  req = {'metodo_xai', 'epoca', 'instancia_id', 'feature', 'valor_atribuicao'}
+  if df_d3.empty or not req.issubset(df_d3.columns):
+    return _vazio('Dados de explicação por instância indisponíveis.')
+
+  df = df_d3[
+      (df_d3['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper())
+      & (pd.to_numeric(df_d3['epoca'], errors='coerce') == int(epoca_alvo))
+  ].copy()
+  if df.empty:
+    return _vazio('Sem dados para o método/época selecionados.')
+
+  df['instancia_id'] = df['instancia_id'].astype(str)
+  df['valor_atribuicao'] = pd.to_numeric(df['valor_atribuicao'], errors='coerce')
+  df = df.dropna(subset=['valor_atribuicao'])
+  if df.empty:
+    return _vazio('Sem valores de atribuição válidos.')
+
+  col_val = next((c for c in COLS_VALOR_FEATURE if c in df.columns), None)
+
+  # Ordenação global das features (mais importante por último => topo do eixo)
+  imp = (
+      df.groupby('feature')['valor_atribuicao']
+      .apply(lambda s: s.abs().mean())
+      .sort_values(ascending=False)
+  )
+  top = list(imp.index[:MAX_FEATURES_BEESWARM])[::-1]
+
+  xs, ys, cores, cds, insts = [], [], [], [], []
+  for i, feat in enumerate(top):
+    sub = df[df['feature'] == feat]
+    x = sub['valor_atribuicao'].to_numpy(dtype=float)
+    y = i + _jitter_beeswarm(x)
+
+    if col_val is not None:
+      v = pd.to_numeric(sub[col_val], errors='coerce').to_numpy(dtype=float)
+      if np.isfinite(v).any():
+        lo, hi = np.nanpercentile(v, [5, 95])
+        if hi - lo < 1e-12:
+          c = np.full(len(v), 0.5)
+        else:
+          c = np.clip((v - lo) / (hi - lo), 0, 1)
+        c = np.where(np.isfinite(c), c, 0.5)
+      else:
+        c = np.full(len(v), 0.5)
+      v_txt = np.array(
+          [f'{a:.4f}' if np.isfinite(a) else 'n/d' for a in v], dtype=object
+      )
+    else:
+      m = np.abs(x).max()
+      c = np.abs(x) / m if m > 1e-12 else np.zeros(len(x))
+      v_txt = np.full(len(x), 'n/d', dtype=object)
+
+    xs.append(x)
+    ys.append(y)
+    cores.append(c)
+    insts.append(sub['instancia_id'].to_numpy(dtype=object))
+    cds.append(
+        np.column_stack([
+            sub['instancia_id'].to_numpy(dtype=object),
+            np.full(len(x), feat, dtype=object),
+            v_txt,
+        ])
+    )
+
+  x_all = np.concatenate(xs)
+  y_all = np.concatenate(ys)
+  c_all = np.concatenate(cores)
+  cd_all = np.vstack(cds)
+  inst_all = np.concatenate(insts)
+
+  titulo_cor = 'Valor da feature' if col_val is not None else '|Atribuição|'
+  fig.add_trace(
+      go.Scattergl(
+          x=x_all,
+          y=y_all,
+          mode='markers',
+          customdata=cd_all,
+          marker=dict(
+              size=6,
+              opacity=0.8,
+              color=c_all,
+              colorscale=COLORSCALE_BEESWARM,
+              cmin=0,
+              cmax=1,
+              colorbar=dict(
+                  title=titulo_cor,
+                  tickvals=[0, 1],
+                  ticktext=['Baixo', 'Alto'],
+                  len=0.7,
+                  thickness=12,
+              ),
+          ),
+          showlegend=False,
+          hovertemplate=(
+              '<b>Instância ID:</b> #%{customdata[0]}<br>'
+              '<b>Feature:</b> %{customdata[1]}<br>'
+              '<b>Atribuição:</b> %{x:.4f}<br>'
+              '<b>Valor da feature:</b> %{customdata[2]}<extra></extra>'
+          ),
+      )
+  )
+
+  # Realce das instâncias selecionadas (anel amarelo)
+  if selecionadas:
+    mask = np.isin(inst_all, list(selecionadas))
+    if mask.any():
+      fig.add_trace(
+          go.Scattergl(
+              x=x_all[mask],
+              y=y_all[mask],
+              mode='markers',
+              marker=dict(
+                  size=11,
+                  color='rgba(0,0,0,0)',
+                  line=dict(color='#eab308', width=2),
+              ),
+              showlegend=False,
+              hoverinfo='skip',
+          )
+      )
+
+  fig.add_vline(x=0, line_width=1, line_color='#94a3b8')
+  fig.update_layout(
+      title=titulo,
+      xaxis=dict(
+          title='Valor de atribuição XAI (← classe 0 | classe 1 →)',
+          zeroline=False,
+      ),
+      yaxis=dict(
+          tickmode='array',
+          tickvals=list(range(len(top))),
+          ticktext=top,
+          automargin=True,
+          tickfont=dict(size=10),
+      ),
+      margin=dict(l=20, r=20, t=40, b=40),
+      template='plotly_white',
+      clickmode='event',
+  )
+  return fig
+
+
 def carregar_dados_sankey(dataset_sel):
   info = MAPA_DATASET.get(dataset_sel, {})
   f_d2 = f'metricas_epocas_{dataset_sel}.csv'
@@ -644,7 +860,14 @@ def campo_dropdown(label, dd_id, options, value=None, mb='12px'):
   ])
 
 
-def card_grafico(titulo, graph_id, altura, config=None, header_extra=None):
+def card_grafico(
+    titulo,
+    graph_id,
+    altura,
+    config=None,
+    header_extra=None,
+    corpo_extra=None,
+):
   if header_extra is None:
     header = dbc.CardHeader(titulo, style=ESTILO_HEADER)
   else:
@@ -656,8 +879,11 @@ def card_grafico(titulo, graph_id, altura, config=None, header_extra=None):
   kwargs = {'id': graph_id, 'style': {'height': altura}}
   if config:
     kwargs['config'] = config
+  corpo = [dcc.Graph(**kwargs)]
+  if corpo_extra is not None:
+    corpo = [corpo_extra] + corpo
   return dbc.Card(
-      [header, dbc.CardBody([dcc.Graph(**kwargs)])],
+      [header, dbc.CardBody(corpo)],
       className='shadow-sm mb-4',
       style=ESTILO_CARD,
   )
@@ -688,6 +914,31 @@ BADGE_LIMPAR = dbc.Badge(
         'boxShadow': '0 2px 4px rgba(0,0,0,0.1)',
         'display': 'none',
     },
+)
+
+# Seleção da forma de ordenar (ranking) as features do heatmap
+CONTROLE_HEATMAP_ORDEM = html.Div(
+    [
+        html.Label('Ordenar features por:', style=ESTILO_LABEL),
+        dcc.RadioItems(
+            id='heatmap-ordem',
+            options=[
+                {
+                    'label': 'Média geral (todas as épocas)',
+                    'value': 'media',
+                },
+                {
+                    'label': 'Mais importante na última época',
+                    'value': 'ultima',
+                },
+            ],
+            value='ultima',
+            inline=True,
+            inputStyle={'marginLeft': '12px', 'marginRight': '4px'},
+            style={'fontSize': '11px', 'color': '#334155'},
+        ),
+    ],
+    style={'marginBottom': '8px'},
 )
 
 TABELA_INSTANCIAS = dash_table.DataTable(
@@ -783,7 +1034,7 @@ SIDEBAR = dbc.Col(
                 ),
                 html.Hr(style={'borderColor': '#cbd5e1', 'margin': '10px 0'}),
                 html.H6(
-                    'Controles 2D',
+                    'Controles 2D / Beeswarm',
                     style={
                         'fontWeight': 'bold',
                         'color': '#1e293b',
@@ -854,6 +1105,7 @@ ABA_XAI = dbc.Tab(
                             'Resumo Global / Heatmap de Importância Temporal',
                             'heatmap-graph',
                             '500px',
+                            corpo_extra=CONTROLE_HEATMAP_ORDEM,
                         ),
                         lg=7,
                     ),
@@ -866,13 +1118,13 @@ ABA_XAI = dbc.Tab(
                         lg=5,
                     ),
                 ]),
-                # 3. Espaço 2D + Boxplot Temporal
+                # 3. Espaço 2D + Beeswarm
                 dbc.Row([
                     coluna(
                         card_grafico(
                             'Redução de Dimensionalidade 2D (t-SNE / PCA)',
                             'dim-scatter-graph',
-                            '460px',
+                            '520px',
                             config=CONFIG_SCATTER,
                             header_extra=BADGE_LIMPAR,
                         ),
@@ -880,9 +1132,9 @@ ABA_XAI = dbc.Tab(
                     ),
                     coluna(
                         card_grafico(
-                            'Análise Auxiliar Temporal (Boxplot)',
-                            'dim-reduction-aux-graph',
-                            '460px',
+                            'Beeswarm de Atribuições XAI por Feature',
+                            'beeswarm-graph',
+                            '520px',
                         ),
                         lg=5,
                     ),
@@ -922,7 +1174,7 @@ ABA_VALIDACAO = dbc.Tab(
                             'Evolução da Performance do Modelo (Acurácia &'
                             ' Loss)',
                             'performance-graph',
-                            '380px',
+                            '400px',
                         )
                     )
                 ]),
@@ -1066,7 +1318,7 @@ def update_options(dataset_sel):
         Input('dim-scatter-graph', 'selectedData'),
         Input('dim-scatter-graph', 'clickData'),
         Input('sankey-graph', 'clickData'),
-        Input('dim-reduction-aux-graph', 'clickData'),
+        Input('beeswarm-graph', 'clickData'),
         Input('dim-tabela-instancias', 'selected_rows'),
         Input('badge-limpar-sankey', 'n_clicks'),
         Input('dropdown-dataset', 'value'),
@@ -1084,7 +1336,7 @@ def gerenciar_estado_selecao(
     selectedDataScatter,
     clickDataScatter,
     clickDataSankey,
-    clickDataBoxplot,
+    clickDataBeeswarm,
     selected_rows_table,
     btn_badge_clicks,
     dataset_sel,
@@ -1117,16 +1369,16 @@ def gerenciar_estado_selecao(
 
   selected_ids = []
 
-  # 1. CLIQUE NO BOXPLOT
+  # 1. CLIQUE NO BEESWARM (seleciona/deseleciona a instância clicada)
   if (
-      triggered_id == 'dim-reduction-aux-graph'
-      and clickDataBoxplot
-      and 'points' in clickDataBoxplot
-      and len(clickDataBoxplot['points']) > 0
+      triggered_id == 'beeswarm-graph'
+      and clickDataBeeswarm
+      and 'points' in clickDataBeeswarm
+      and len(clickDataBeeswarm['points']) > 0
   ):
-    p_box = clickDataBoxplot['points'][0]
-    if 'customdata' in p_box and len(p_box['customdata']) > 0:
-      inst_id = str(p_box['customdata'][0])
+    p_bee = clickDataBeeswarm['points'][0]
+    if 'customdata' in p_bee and len(p_bee['customdata']) > 0:
+      inst_id = str(p_bee['customdata'][0])
       if state_last_box == inst_id:
         return [], None
       else:
@@ -1226,7 +1478,7 @@ def gerenciar_estado_selecao(
         Output('stability-graph', 'figure'),
         Output('heatmap-graph', 'figure'),
         Output('dim-scatter-graph', 'figure'),
-        Output('dim-reduction-aux-graph', 'figure'),
+        Output('beeswarm-graph', 'figure'),
         Output('sankey-graph', 'figure'),
         Output('confusion-matrix-graph', 'figure'),
         Output('class-metrics-graph', 'figure'),
@@ -1243,6 +1495,7 @@ def gerenciar_estado_selecao(
         Input('dim-dropdown-epoca', 'value'),
         Input('dim-dropdown-algo', 'value'),
         Input('dim-dropdown-cor', 'value'),
+        Input('heatmap-ordem', 'value'),
         Input('store-instancias-selecionadas', 'data'),
         Input('sankey-graph', 'clickData'),
         Input('badge-limpar-sankey', 'n_clicks'),
@@ -1257,6 +1510,7 @@ def update_all_graphs(
     epoca_proj_sel,
     algo_sel,
     cor_proj_sel,
+    heatmap_ordem,
     instancias_selecionadas_store,
     clickDataSankey,
     btn_badge_clicks,
@@ -1326,6 +1580,7 @@ def update_all_graphs(
           )
       )
 
+  # Legenda abaixo da área de plotagem (não oclui as linhas)
   fig_perf.update_layout(
       title=f'Desempenho Preditivo do Modelo - {label_ds}',
       xaxis=dict(title='Época'),
@@ -1337,8 +1592,14 @@ def update_all_graphs(
           showgrid=False,
           rangemode='tozero',
       ),
-      margin=dict(t=40, b=40, l=40, r=40),
-      legend=dict(x=0.01, y=0.99, orientation='h'),
+      margin=dict(t=40, b=90, l=40, r=40),
+      legend=dict(
+          orientation='h',
+          x=0.5,
+          xanchor='center',
+          y=-0.25,
+          yanchor='top',
+      ),
       template='plotly_white',
   )
 
@@ -1404,9 +1665,15 @@ def update_all_graphs(
 
   # ----------------------------------------------------
   # 3. HEATMAP DE IMPORTÂNCIA (segue o Método XAI principal)
+  #    Ranking: média geral OU mais importante na última época
   # ----------------------------------------------------
   fig_heat = go.Figure()
   heat_label = 'MÉDIA GERAL' if is_comb else str(metodo_sel).upper()
+  ordem_label = (
+      'ordenado pela média de todas as épocas'
+      if heatmap_ordem == 'media'
+      else 'ordenado pela última época'
+  )
 
   if not df_d4.empty and 'importancia_media' in df_d4.columns:
     df_h_sub = df_d4[
@@ -1424,8 +1691,13 @@ def update_all_graphs(
 
       if not piv.empty:
         piv = piv.reindex(sorted(piv.columns), axis=1)
-        ultima_coluna = piv.columns[-1]
-        ordem_ranking = piv[ultima_coluna].sort_values(ascending=True).index
+
+        if heatmap_ordem == 'media':
+          chave_ordem = piv.mean(axis=1)
+        else:
+          chave_ordem = piv[piv.columns[-1]]
+        # ascending=True => feature mais importante no topo do heatmap
+        ordem_ranking = chave_ordem.sort_values(ascending=True).index
         piv = piv.reindex(ordem_ranking)
 
         df_ranks = piv.rank(ascending=False, method='min', axis=0)
@@ -1472,7 +1744,7 @@ def update_all_graphs(
             )
         )
         fig_heat.update_layout(
-            title=f'Heatmap de Importância ({heat_label})',
+            title=f'Heatmap de Importância ({heat_label}) - {ordem_label}',
             xaxis=dict(title='Época'),
             yaxis=dict(dtick=1, automargin=True, tickfont=dict(size=10)),
             margin=dict(t=40, b=30, l=150, r=20),
@@ -1704,39 +1976,17 @@ def update_all_graphs(
       )
 
   # ----------------------------------------------------
-  # 5. BOXPLOT AUXILIAR TEMPORAL
+  # 5. BEESWARM DE ATRIBUIÇÕES XAI (substitui o boxplot)
   # ----------------------------------------------------
-  fig_dim_aux = go.Figure()
-  if not df_d6.empty and 'tsne_dim_1' in df_d6.columns:
-    df_aux_sub = df_d6[
-        df_d6['metodo_xai'].astype(str).str.upper() == str(metodo_sel).upper()
-    ].copy()
-    if not df_aux_sub.empty and 'epoca' in df_aux_sub.columns:
-      df_aux_sub['instancia_id'] = df_aux_sub['instancia_id'].astype(str)
-      custom_box_data = np.array(df_aux_sub['instancia_id']).reshape(-1, 1)
-      nome_dim = 'PCA conjunto Dim 1' if is_comb else 't-SNE Dim 1'
-
-      fig_dim_aux = go.Figure(
-          data=go.Box(
-              x=df_aux_sub['epoca'],
-              y=df_aux_sub['tsne_dim_1'],
-              customdata=custom_box_data,
-              name=nome_dim,
-              marker_color='#6366f1',
-              boxpoints='outliers',
-              hovertemplate=(
-                  '<b>Instância ID:</b> #%{customdata[0]}<br><b>Época:</b>'
-                  f' %{{x}}<br><b>{nome_dim}:</b>'
-                  ' %{y:.4f}<extra></extra>'
-              ),
-          )
-      )
-      fig_dim_aux.update_layout(
-          title=f'Dispersão Temporal ({nome_dim})',
-          yaxis=dict(rangemode='tozero'),
-          margin=dict(l=20, r=20, t=30, b=20),
-          template='plotly_white',
-      )
+  epoca_beeswarm = epoca_proj_sel if epoca_proj_sel else 1
+  fig_beeswarm = construir_beeswarm(
+      df_d3,
+      metodo_sel,
+      epoca_beeswarm,
+      instancias_selecionadas_tabela,
+      'MÉDIA GERAL' if is_comb else str(metodo_sel).upper(),
+      label_ds,
+  )
 
   # ----------------------------------------------------
   # 6. SANKEY TEMPORAL DE EXPLICAÇÕES
@@ -1986,7 +2236,7 @@ def update_all_graphs(
       fig_stab,
       fig_heat,
       fig_tsne,
-      fig_dim_aux,
+      fig_beeswarm,
       fig_sankey,
       fig_cm,
       fig_class_metrics,
