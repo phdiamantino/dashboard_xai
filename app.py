@@ -40,8 +40,30 @@ PALETA_METODOS = [
 ]
 COR_COMBINADO = '#111827'
 
-# Nome oficial da coluna com o valor original da feature (usada na cor do beeswarm)
-COL_VALOR_FEATURE = 'valor_feature'
+# Nome oficial da coluna com o VALOR ORIGINAL da feature no CSV de explicações
+# (usada na cor do beeswarm). Se None, o código tenta detectar a coluna nos
+# dados crus (antes da normalização). Se souber o nome, preencha aqui.
+COL_VALOR_FEATURE = None
+
+# Colunas já conhecidas pelo dashboard (ignoradas na detecção automática)
+COLUNAS_CONHECIDAS = {
+    'metodo_xai',
+    'epoca',
+    'instancia_id',
+    'instance_id',
+    'id',
+    'sample_id',
+    'feature',
+    'valor_atribuicao',
+    'importancia_absoluta',
+    'modelo_id',
+    'dataset_name',
+    'classe_real',
+    'classe_predita',
+    'erro_predicao',
+    'confianca',
+    'confianca_media',
+}
 
 # Máximo de features exibidas no beeswarm
 MAX_FEATURES_BEESWARM = 15
@@ -159,7 +181,9 @@ def combinar_metodos_xai(df, chaves, cols_media):
   """Cria o método XAI combinado (METODO_COMBINADO).
 
   Agrupa as linhas de todos os métodos pelas `chaves` (ex.: época, instância,
-  feature) e tira a média das colunas numéricas em `cols_media`.
+  feature) e tira a média das colunas numéricas em `cols_media`. As demais
+  colunas recebem o primeiro valor do grupo. Deve ser chamada DEPOIS da
+  normalização por método, para que nenhum método domine a média.
   """
   if df.empty or 'metodo_xai' not in df.columns:
     return df
@@ -215,7 +239,55 @@ def carregar_csv_seguro(nome_base, dataset_sel):
   return pd.DataFrame()
 
 
+def detectar_col_valor_feature(df_cru, dataset_sel):
+  """Descobre a coluna com o valor ORIGINAL da feature nos dados crus.
+
+  Usa COL_VALOR_FEATURE, se definido. Caso contrário, procura colunas numéricas
+  que o dashboard não conhece: se houver exatamente uma, é a escolhida. Em
+  qualquer outro caso retorna None e imprime as colunas para conferência.
+  """
+  if df_cru.empty:
+    return None
+
+  if COL_VALOR_FEATURE:
+    if COL_VALOR_FEATURE in df_cru.columns:
+      return COL_VALOR_FEATURE
+    print(
+        f'[Aviso] COL_VALOR_FEATURE="{COL_VALOR_FEATURE}" não existe em'
+        f' explicacoes_instancias ({dataset_sel}). Colunas:'
+        f' {list(df_cru.columns)}'
+    )
+    return None
+
+  candidatas = [
+      c
+      for c in df_cru.columns
+      if c not in COLUNAS_CONHECIDAS
+      and pd.api.types.is_numeric_dtype(df_cru[c])
+  ]
+  if len(candidatas) == 1:
+    print(
+        f'[Info] Coluna de valor da feature detectada ({dataset_sel}):'
+        f' {candidatas[0]}'
+    )
+    return candidatas[0]
+
+  print(
+      f'[Aviso] Não foi possível identificar a coluna de valor da feature'
+      f' ({dataset_sel}). Candidatas: {candidatas}. Colunas do CSV:'
+      f' {list(df_cru.columns)}. Defina COL_VALOR_FEATURE.'
+  )
+  return None
+
+
 def _d6_combinado(df_d6, df_d3):
+  """Projeção 2D do método combinado.
+
+  As coordenadas t-SNE de métodos diferentes vivem em espaços diferentes, então
+  não faz sentido tirar a média delas. O método combinado usa um PCA conjunto
+  (todas as épocas) sobre as atribuições combinadas. Se não for possível,
+  usa a média das coordenadas como fallback.
+  """
   req = ['metodo_xai', 'epoca', 'instancia_id']
   if df_d6.empty or any(c not in df_d6.columns for c in req):
     return df_d6
@@ -231,6 +303,7 @@ def _d6_combinado(df_d6, df_d3):
   comb = base.drop_duplicates(['epoca', 'instancia_id']).copy()
   comb['metodo_xai'] = METODO_COMBINADO
 
+  # Fallback: média das coordenadas entre os métodos
   if len(coords) == 2:
     medias = base.groupby(['epoca', 'instancia_id'], as_index=False)[coords].mean()
     comb = comb.drop(columns=coords).merge(
@@ -261,12 +334,28 @@ def _d6_combinado(df_d6, df_d3):
 
 @lru_cache(maxsize=8)
 def carregar_bundle(dataset_sel):
+  """Carrega e prepara todos os dados do dataset (com o método combinado).
+
+  Os DataFrames retornados são compartilhados via cache: não modificar
+  in-place (use .copy()).
+  """
   df_d2 = carregar_csv_seguro('metricas_epocas', dataset_sel)
   df_d3 = carregar_csv_seguro('explicacoes_instancias', dataset_sel)
   df_d4 = carregar_csv_seguro('resumo_explicacoes', dataset_sel)
   df_d5 = carregar_csv_seguro('metricas_estabilidade_concordancia', dataset_sel)
   df_d6 = carregar_csv_seguro('projecao_tsne_epocas', dataset_sel)
 
+  # D3: ANTES de normalizar, identifica a coluna do valor original da feature
+  # e preserva a atribuição bruta (valores oficiais, sem normalização).
+  col_valor_feature = detectar_col_valor_feature(df_d3, dataset_sel)
+
+  if not df_d3.empty and 'valor_atribuicao' in df_d3.columns:
+    df_d3 = df_d3.copy()
+    df_d3['valor_atribuicao_bruto'] = pd.to_numeric(
+        df_d3['valor_atribuicao'], errors='coerce'
+    )
+
+  # D3: normalização por método (preservando evolução temporal) + combinado
   if not df_d3.empty:
     df_d3 = df_d3.copy()
     if 'valor_atribuicao' in df_d3.columns:
@@ -282,17 +371,13 @@ def carregar_bundle(dataset_sel):
       df_d3 = normalizar_coluna_por_grupo(
           df_d3, 'importancia_absoluta', ['metodo_xai']
       )
-    
-    cols_media_d3 = ['valor_atribuicao', 'importancia_absoluta']
-    if COL_VALOR_FEATURE in df_d3.columns:
-      cols_media_d3.append(COL_VALOR_FEATURE)
-
     df_d3 = combinar_metodos_xai(
         df_d3,
         ['epoca', 'instancia_id', 'feature'],
-        cols_media_d3,
+        ['valor_atribuicao', 'importancia_absoluta'],
     )
 
+  # D4 (heatmap): |importância| normalizada por método + combinado
   if (
       not df_d4.empty
       and {'metodo_xai', 'feature', 'epoca'}.issubset(df_d4.columns)
@@ -319,12 +404,22 @@ def carregar_bundle(dataset_sel):
     )
     df_d4 = df_h
 
+  # D6: projeção do método combinado
   df_d6 = _d6_combinado(df_d6, df_d3)
 
-  return {'d2': df_d2, 'd3': df_d3, 'd4': df_d4, 'd5': df_d5, 'd6': df_d6}
+  return {
+      'd2': df_d2,
+      'd3': df_d3,
+      'd4': df_d4,
+      'd5': df_d5,
+      'd6': df_d6,
+      'col_valor_feature': col_valor_feature,
+  }
 
 
 def serie_estabilidade(df_d5, metodo_sel, metrica_sel, metodos_xai):
+  """Série de estabilidade; para o método combinado, média entre os métodos
+  (cada um normalizado individualmente quando a métrica não é Spearman)."""
   if df_d5.empty or 'tipo_metrica' not in df_d5.columns:
     return pd.DataFrame()
 
@@ -365,6 +460,7 @@ def serie_estabilidade(df_d5, metodo_sel, metrica_sel, metodos_xai):
 # BEESWARM (estilo SHAP) EM PLOTLY
 # ------------------------------------------
 def _jitter_beeswarm(x, n_bins=30, largura_max=0.38):
+  """Deslocamento vertical (jitter) proporcional à densidade local de x."""
   x = np.asarray(x, dtype=float)
   n = len(x)
   y = np.zeros(n)
@@ -392,8 +488,24 @@ def _jitter_beeswarm(x, n_bins=30, largura_max=0.38):
 
 
 def construir_beeswarm(
-    df_d3, metodo_sel, epoca_alvo, selecionadas, label_metodo, label_ds
+    df_d3,
+    metodo_sel,
+    epoca_alvo,
+    selecionadas,
+    label_metodo,
+    label_ds,
+    col_valor_feature=None,
 ):
+  """Beeswarm das atribuições XAI por feature para um método e uma época.
+
+  - Eixo Y: features ordenadas por média de |atribuição| (mais importante no
+    topo).
+  - Eixo X: atribuição de cada instância. Para métodos individuais usa o valor
+    BRUTO (oficial, sem normalização); para a MÉDIA GERAL usa o valor
+    normalizado, pois os métodos têm escalas diferentes.
+  - Cor: valor original da feature (baixo -> alto), se a coluna existir; caso
+    contrário, |atribuição|.
+  """
   fig = go.Figure()
   titulo = f'Beeswarm de Atribuições XAI - {label_metodo} - Época {epoca_alvo}'
 
@@ -421,17 +533,30 @@ def construir_beeswarm(
   if df.empty:
     return _vazio('Sem dados para o método/época selecionados.')
 
+  # Escolha da escala do eixo X
+  is_comb = str(metodo_sel) == METODO_COMBINADO
+  if not is_comb and 'valor_atribuicao_bruto' in df.columns:
+    col_x = 'valor_atribuicao_bruto'
+    rotulo_escala = 'valor bruto'
+  else:
+    col_x = 'valor_atribuicao'
+    rotulo_escala = 'normalizado'
+
   df['instancia_id'] = df['instancia_id'].astype(str)
-  df['valor_atribuicao'] = pd.to_numeric(df['valor_atribuicao'], errors='coerce')
-  df = df.dropna(subset=['valor_atribuicao'])
+  df[col_x] = pd.to_numeric(df[col_x], errors='coerce')
+  df = df.dropna(subset=[col_x])
   if df.empty:
     return _vazio('Sem valores de atribuição válidos.')
 
-  # Utilização direta da coluna oficial do valor da feature
-  tem_col_val = COL_VALOR_FEATURE in df.columns
+  col_val = (
+      col_valor_feature
+      if (col_valor_feature and col_valor_feature in df.columns)
+      else None
+  )
 
+  # Ordenação global das features (mais importante por último => topo do eixo)
   imp = (
-      df.groupby('feature')['valor_atribuicao']
+      df.groupby('feature')[col_x]
       .apply(lambda s: s.abs().mean())
       .sort_values(ascending=False)
   )
@@ -440,11 +565,11 @@ def construir_beeswarm(
   xs, ys, cores, cds, insts = [], [], [], [], []
   for i, feat in enumerate(top):
     sub = df[df['feature'] == feat]
-    x = sub['valor_atribuicao'].to_numpy(dtype=float)
+    x = sub[col_x].to_numpy(dtype=float)
     y = i + _jitter_beeswarm(x)
 
-    if tem_col_val:
-      v = pd.to_numeric(sub[COL_VALOR_FEATURE], errors='coerce').to_numpy(dtype=float)
+    if col_val is not None:
+      v = pd.to_numeric(sub[col_val], errors='coerce').to_numpy(dtype=float)
       if np.isfinite(v).any():
         lo, hi = np.nanpercentile(v, [5, 95])
         if hi - lo < 1e-12:
@@ -480,7 +605,7 @@ def construir_beeswarm(
   cd_all = np.vstack(cds)
   inst_all = np.concatenate(insts)
 
-  titulo_cor = 'Valor da feature' if tem_col_val else '|Atribuição|'
+  titulo_cor = 'Valor da feature' if col_val is not None else '|Atribuição|'
   fig.add_trace(
       go.Scattergl(
           x=x_all,
@@ -512,6 +637,7 @@ def construir_beeswarm(
       )
   )
 
+  # Realce das instâncias selecionadas (anel amarelo)
   if selecionadas:
     mask = np.isin(inst_all, list(selecionadas))
     if mask.any():
@@ -534,7 +660,9 @@ def construir_beeswarm(
   fig.update_layout(
       title=titulo,
       xaxis=dict(
-          title='Valor de atribuição XAI (← classe 0 | classe 1 →)',
+          title=(
+              f'Atribuição XAI ({rotulo_escala}) (← classe 0 | classe 1 →)'
+          ),
           zeroline=False,
       ),
       yaxis=dict(
@@ -616,14 +744,11 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
   else:
     df_d3['instancia_id'] = df_d3['instancia_id'].astype(str)
 
-  cols_media_sankey = ['importancia_absoluta', 'valor_atribuicao']
-  if COL_VALOR_FEATURE in df_d3.columns:
-    cols_media_sankey.append(COL_VALOR_FEATURE)
-
+  # Método XAI combinado (após a normalização por método)
   df_d3 = combinar_metodos_xai(
       df_d3,
       ['epoca', 'instancia_id', 'feature'],
-      cols_media_sankey,
+      ['importancia_absoluta', 'valor_atribuicao'],
   )
 
   agg_dict = {'importancia_absoluta': 'sum'}
@@ -657,7 +782,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
       else (df_d2.columns[2] if len(df_d2.columns) > 2 else acc_col)
   )
 
-  df_d2_sub = df_d2[['epoca', acc_col, loss_col']].copy()
+  df_d2_sub = df_d2[['epoca', acc_col, loss_col]].copy()
   df_d2_sub.columns = ['epoca', 'accuracy', 'loss_validacao']
   df_d2_sub['epoca'] = (
       pd.to_numeric(df_d2_sub['epoca'], errors='coerce').fillna(0).astype(int)
@@ -798,6 +923,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
 
 @lru_cache(maxsize=8)
 def obter_sankey(dataset_sel):
+  """Sankey processado (cacheado por dataset). Não modificar in-place."""
   df_d3_s, df_d2_s = carregar_dados_sankey(dataset_sel)
   return processar_dados_sankey(df_d3_s, df_d2_s, dataset_sel, normalizar=True)
 
@@ -886,6 +1012,7 @@ BADGE_LIMPAR = dbc.Badge(
     },
 )
 
+# Seleção da forma de ordenar (ranking) as features do heatmap
 CONTROLE_HEATMAP_ORDEM = html.Div(
     [
         html.Label('Ordenar features por:', style=ESTILO_LABEL),
@@ -1056,6 +1183,7 @@ ABA_XAI = dbc.Tab(
     children=[
         html.Div(
             [
+                # 1. Sankey
                 dbc.Row([
                     coluna(
                         card_grafico(
@@ -1066,6 +1194,7 @@ ABA_XAI = dbc.Tab(
                         )
                     )
                 ]),
+                # 2. Heatmap (segue o "Método XAI" principal) e Estabilidade
                 dbc.Row([
                     coluna(
                         card_grafico(
@@ -1085,6 +1214,7 @@ ABA_XAI = dbc.Tab(
                         lg=5,
                     ),
                 ]),
+                # 3. Espaço 2D + Beeswarm
                 dbc.Row([
                     coluna(
                         card_grafico(
@@ -1105,6 +1235,7 @@ ABA_XAI = dbc.Tab(
                         lg=5,
                     ),
                 ]),
+                # 4. Tabela Auxiliar de Instâncias
                 dbc.Row([
                     coluna(
                         dbc.Card(
@@ -1273,6 +1404,7 @@ def update_options(dataset_sel):
   )
 
 
+# CALLBACK CENTRAL DE ESTADO
 @app.callback(
     [
         Output('store-instancias-selecionadas', 'data'),
@@ -1333,6 +1465,7 @@ def gerenciar_estado_selecao(
 
   selected_ids = []
 
+  # 1. CLIQUE NO BEESWARM (seleciona/deseleciona a instância clicada)
   if (
       triggered_id == 'beeswarm-graph'
       and clickDataBeeswarm
@@ -1347,6 +1480,7 @@ def gerenciar_estado_selecao(
       else:
         return [inst_id], inst_id
 
+  # 2. SELEÇÃO VIA SANKEY
   if (
       triggered_id == 'sankey-graph'
       and clickDataSankey
@@ -1391,6 +1525,7 @@ def gerenciar_estado_selecao(
 
           return ids_sankey, None
 
+  # 3. SELEÇÃO VIA BRUSHING NO SPATIAL SCATTER (2D)
   if triggered_id == 'dim-scatter-graph':
     if (
         selectedDataScatter is not None
@@ -1418,6 +1553,7 @@ def gerenciar_estado_selecao(
           return [], None
         return [inst_id], None
 
+  # 4. SELEÇÃO VIA TABELA
   if (
       triggered_id == 'dim-tabela-instancias'
       and selected_rows_table
@@ -1431,6 +1567,7 @@ def gerenciar_estado_selecao(
   return state_selected_ids or [], state_last_box
 
 
+# CALLBACK PRINCIPAL DOS GRÁFICOS
 @app.callback(
     [
         Output('performance-graph', 'figure'),
@@ -1476,10 +1613,12 @@ def update_all_graphs(
 ):
   bundle = carregar_bundle(dataset_sel)
   df_d2 = bundle['d2']
-  df_d3 = bundle['d3']
-  df_d4 = bundle['d4']
+  df_d3 = bundle['d3']  # normalizado por método + método combinado (+ bruto)
+  df_d4 = bundle['d4']  # já normalizado por método + método combinado
   df_d5 = bundle['d5']
-  df_d6 = bundle['d6']
+  df_d6 = bundle['d6']  # inclui o método combinado
+  col_valor_feature = bundle['col_valor_feature']
+  # Versão sem o método combinado (evita duplicar contagens nas métricas)
   df_d6_orig = (
       df_d6[df_d6['metodo_xai'].astype(str) != METODO_COMBINADO]
       if (not df_d6.empty and 'metodo_xai' in df_d6.columns)
@@ -1504,6 +1643,9 @@ def update_all_graphs(
       ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
   )
 
+  # ----------------------------------------------------
+  # 1. GRAPH 1: PERFORMANCE DO MODELO
+  # ----------------------------------------------------
   fig_perf = go.Figure()
   if not df_d2.empty:
     acc_col = (
@@ -1535,6 +1677,7 @@ def update_all_graphs(
           )
       )
 
+  # Legenda abaixo da área de plotagem (não oclui as linhas)
   fig_perf.update_layout(
       title=f'Desempenho Preditivo do Modelo - {label_ds}',
       xaxis=dict(title='Época'),
@@ -1557,6 +1700,10 @@ def update_all_graphs(
       template='plotly_white',
   )
 
+  # ----------------------------------------------------
+  # 2. GRAPH 2: ESTABILIDADE DAS EXPLICAÇÕES
+  #    Todas as linhas XAI + destaque para o método selecionado
+  # ----------------------------------------------------
   fig_stab = go.Figure()
 
   cores_metodos = {
@@ -1567,6 +1714,7 @@ def update_all_graphs(
 
   linhas_estab = [(m, str(m).upper()) for m in metodos_xai]
   linhas_estab.append((METODO_COMBINADO, 'MÉDIA GERAL'))
+  # Método selecionado por último => desenhado por cima das demais
   linhas_estab.sort(key=lambda t: t[0] == metodo_sel)
 
   for m_key, m_nome in linhas_estab:
@@ -1612,6 +1760,10 @@ def update_all_graphs(
       template='plotly_white',
   )
 
+  # ----------------------------------------------------
+  # 3. HEATMAP DE IMPORTÂNCIA (segue o Método XAI principal)
+  #    Ranking: média geral OU mais importante na última época
+  # ----------------------------------------------------
   fig_heat = go.Figure()
   heat_label = 'MÉDIA GERAL' if is_comb else str(metodo_sel).upper()
   ordem_label = (
@@ -1641,6 +1793,7 @@ def update_all_graphs(
           chave_ordem = piv.mean(axis=1)
         else:
           chave_ordem = piv[piv.columns[-1]]
+        # ascending=True => feature mais importante no topo do heatmap
         ordem_ranking = chave_ordem.sort_values(ascending=True).index
         piv = piv.reindex(ordem_ranking)
 
@@ -1772,6 +1925,9 @@ def update_all_graphs(
     badge_children = []
     badge_style = {'display': 'none'}
 
+  # ----------------------------------------------------
+  # 4. REDUÇÃO DE DIMENSIONALIDADE (t-SNE / PCA)
+  # ----------------------------------------------------
   fig_tsne = go.Figure()
   if not df_d6.empty:
     epoca_alvo = (
@@ -1784,6 +1940,7 @@ def update_all_graphs(
         & (df_d6['epoca'] == int(epoca_alvo))
     ].copy()
 
+    # No método combinado, a projeção "t-SNE" é um PCA conjunto
     algo_label = 'PCA conjunto' if (is_comb and algo_sel != 'PCA') else algo_sel
 
     if not df_sub.empty:
@@ -1900,6 +2057,8 @@ def update_all_graphs(
               )
           )
 
+      # Eixos do espaço 2D são coordenadas arbitrárias (com valores negativos):
+      # não forçamos o início em 0 para não distorcer/ocultar pontos.
       fig_tsne.update_layout(
           title=(
               f'Espaço 2D ({algo_label}) - Época {epoca_alvo}'
@@ -1913,6 +2072,9 @@ def update_all_graphs(
           clickmode='event+select',
       )
 
+  # ----------------------------------------------------
+  # 5. BEESWARM DE ATRIBUIÇÕES XAI (substitui o boxplot)
+  # ----------------------------------------------------
   epoca_beeswarm = epoca_proj_sel if epoca_proj_sel else 1
   fig_beeswarm = construir_beeswarm(
       df_d3,
@@ -1921,8 +2083,12 @@ def update_all_graphs(
       instancias_selecionadas_tabela,
       'MÉDIA GERAL' if is_comb else str(metodo_sel).upper(),
       label_ds,
+      col_valor_feature=col_valor_feature,
   )
 
+  # ----------------------------------------------------
+  # 6. SANKEY TEMPORAL DE EXPLICAÇÕES
+  # ----------------------------------------------------
   fig_sankey = go.Figure()
   if not df_sankey_processed.empty:
     metodos_validos = df_sankey_processed['metodo_xai'].unique()
@@ -2042,6 +2208,9 @@ def update_all_graphs(
           template='plotly_white',
       )
 
+  # ----------------------------------------------------
+  # 7. MATRIZ DE CONFUSÃO
+  # ----------------------------------------------------
   fig_cm = go.Figure()
   epoca_alvo_val = epoca_proj_sel if epoca_proj_sel else 1
   if not df_d6_orig.empty:
@@ -2072,6 +2241,9 @@ def update_all_graphs(
           template='plotly_white',
       )
 
+  # ----------------------------------------------------
+  # 8. MÉTRICAS DE CLASSIFICAÇÃO
+  # ----------------------------------------------------
   fig_class_metrics = go.Figure()
   if not df_d6_orig.empty:
     df_ep_val = df_d6_orig[df_d6_orig['epoca'] == int(epoca_alvo_val)].copy()
@@ -2120,6 +2292,9 @@ def update_all_graphs(
           template='plotly_white',
       )
 
+  # ----------------------------------------------------
+  # 9. DISTRIBUIÇÃO DOS ERROS DE PREDIÇÃO
+  # ----------------------------------------------------
   fig_err_dist = go.Figure()
   if not df_d6_orig.empty and 'erro_predicao' in df_d6_orig.columns:
     df_d6_copy = df_d6_orig.copy()
@@ -2169,6 +2344,7 @@ def update_all_graphs(
   )
 
 
+# CALLBACK TABELA
 @app.callback(
     Output('dim-tabela-instancias', 'data'),
     [
