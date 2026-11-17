@@ -1008,11 +1008,11 @@ BADGE_LIMPAR = dbc.Badge(
     },
 )
 
-# Seleção da forma de ordenar (ranking) as features do heatmap
+# Seleção da forma de ordenar (ranking) as features do heatmap (Dropdown Select)
 CONTROLE_HEATMAP_ORDEM = html.Div(
     [
         html.Label('Ordenar features por:', style=ESTILO_LABEL),
-        dcc.RadioItems(
+        dcc.Dropdown(
             id='heatmap-ordem',
             options=[
                 {
@@ -1025,9 +1025,8 @@ CONTROLE_HEATMAP_ORDEM = html.Div(
                 },
             ],
             value='media',
-            inline=True,
-            inputStyle={'marginLeft': '12px', 'marginRight': '4px'},
-            style={'fontSize': '11px', 'color': '#334155'},
+            clearable=False,
+            style={'fontSize': '11px', 'marginBottom': '8px'},
         ),
     ],
     style={'marginBottom': '8px'},
