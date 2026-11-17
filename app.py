@@ -108,6 +108,7 @@ COLORSCALE_BLUES_20 = [
     [1.0, 'rgb(8, 48, 107)'],
 ]
 
+# Escala azul -> vermelho no estilo do beeswarm do SHAP
 COLORSCALE_BEESWARM = [[0.0, '#008bfb'], [1.0, '#ff0051']]
 
 # ==========================================
@@ -146,6 +147,7 @@ def Mapeamento_classes_dataset(dataset_name):
 
 
 def normalizar_coluna_por_grupo(df, col_valor, cols_grupo=['metodo_xai']):
+    """Aplica normalização Min-Max por método XAI ao longo de todas as épocas."""
     if df.empty or col_valor not in df.columns:
         return df
 
@@ -172,6 +174,13 @@ def normalizar_coluna_por_grupo(df, col_valor, cols_grupo=['metodo_xai']):
 
 
 def combinar_metodos_xai(df, chaves, cols_media):
+    """Cria o método XAI combinado (METODO_COMBINADO).
+
+    Agrupa as linhas de todos os métodos pelas `chaves` (ex.: época, instância,
+    feature) e tira a média das colunas numéricas em `cols_media`. As demais
+    colunas recebem o primeiro valor do grupo. Deve ser chamada DEPOIS da
+    normalização por método, para que nenhum método domine a média.
+    """
     if df.empty or 'metodo_xai' not in df.columns:
         return df
 
@@ -227,12 +236,23 @@ def carregar_csv_seguro(nome_base, dataset_sel):
 
 
 def detectar_col_valor_feature(df_cru, dataset_sel):
+    """Descobre a coluna com o valor ORIGINAL da feature nos dados crus.
+
+    Usa COL_VALOR_FEATURE, se definido. Caso contrário, procura colunas numéricas
+    que o dashboard não conhece: se houver exatamente uma, é a escolhida. Em
+    qualquer outro caso retorna None e imprime as colunas para conferência.
+    """
     if df_cru.empty:
         return None
 
     if COL_VALOR_FEATURE:
         if COL_VALOR_FEATURE in df_cru.columns:
             return COL_VALOR_FEATURE
+        print(
+            f'[Aviso] COL_VALOR_FEATURE="{COL_VALOR_FEATURE}" não existe em'
+            f' explicacoes_instancias ({dataset_sel}). Colunas:'
+            f' {list(df_cru.columns)}'
+        )
         return None
 
     candidatas = [
@@ -242,11 +262,28 @@ def detectar_col_valor_feature(df_cru, dataset_sel):
         and pd.api.types.is_numeric_dtype(df_cru[c])
     ]
     if len(candidatas) == 1:
+        print(
+            f'[Info] Coluna de valor da feature detectada ({dataset_sel}):'
+            f' {candidatas[0]}'
+        )
         return candidatas[0]
+
+    print(
+        f'[Aviso] Não foi possível identificar a coluna de valor da feature'
+        f' ({dataset_sel}). Candidatas: {candidatas}. Colunas do CSV:'
+        f' {list(df_cru.columns)}. Defina COL_VALOR_FEATURE.'
+    )
     return None
 
 
 def _d6_combinado(df_d6, df_d3):
+    """Projeção 2D do método combinado.
+
+    As coordenadas t-SNE de métodos diferentes vivem em espaços diferentes, então
+    não faz sentido tirar a média delas. O método combinado usa um PCA conjunto
+    (todas las épocas) sobre as atribuições combinadas. Se não for possível,
+    usa a média das coordenadas como fallback.
+    """
     req = ['metodo_xai', 'epoca', 'instancia_id']
     if df_d6.empty or any(c not in df_d6.columns for c in req):
         return df_d6
@@ -262,6 +299,7 @@ def _d6_combinado(df_d6, df_d3):
     comb = base.drop_duplicates(['epoca', 'instancia_id']).copy()
     comb['metodo_xai'] = METODO_COMBINADO
 
+    # Fallback: média das coordenadas entre os métodos
     if len(coords) == 2:
         medias = base.groupby(['epoca', 'instancia_id'], as_index=False)[coords].mean()
         comb = comb.drop(columns=coords).merge(
@@ -292,12 +330,19 @@ def _d6_combinado(df_d6, df_d3):
 
 @lru_cache(maxsize=8)
 def carregar_bundle(dataset_sel):
+    """Carrega e prepara todos os dados do dataset (com o método combinado).
+
+    Os DataFrames retornados são compartilhados via cache: não modificar
+    in-place (use .copy()).
+    """
     df_d2 = carregar_csv_seguro('metricas_epocas', dataset_sel)
     df_d3 = carregar_csv_seguro('explicacoes_instancias', dataset_sel)
     df_d4 = carregar_csv_seguro('resumo_explicacoes', dataset_sel)
     df_d5 = carregar_csv_seguro('metricas_estabilidade_concordancia', dataset_sel)
     df_d6 = carregar_csv_seguro('projecao_tsne_epocas', dataset_sel)
 
+    # D3: ANTES de normalizar, identifica a coluna do valor original da feature
+    # e preserva a atribuição bruta (valores oficiais, sem normalização) para o beeswarm.
     col_valor_feature = detectar_col_valor_feature(df_d3, dataset_sel)
 
     if not df_d3.empty and 'valor_atribuicao' in df_d3.columns:
@@ -306,6 +351,7 @@ def carregar_bundle(dataset_sel):
             df_d3['valor_atribuicao'], errors='coerce'
         )
 
+    # D3: normalização por método (preservando evolução temporal) + combinado
     if not df_d3.empty:
         df_d3 = df_d3.copy()
         if 'valor_atribuicao' in df_d3.columns:
@@ -327,6 +373,7 @@ def carregar_bundle(dataset_sel):
             ['valor_atribuicao', 'importancia_absoluta'],
         )
 
+    # D4 (heatmap): |importância| normalizada por método + combinado
     if (
         not df_d4.empty
         and {'metodo_xai', 'feature', 'epoca'}.issubset(df_d4.columns)
@@ -353,6 +400,7 @@ def carregar_bundle(dataset_sel):
         )
         df_d4 = df_h
 
+    # D6: projeção do método combinado
     df_d6 = _d6_combinado(df_d6, df_d3)
 
     return {
@@ -366,6 +414,8 @@ def carregar_bundle(dataset_sel):
 
 
 def serie_estabilidade(df_d5, metodo_sel, metrica_sel, metodos_xai):
+    """Série de estabilidade; para o método combinado, média entre os métodos
+    (cada um normalizado individualmente quando a métrica não é Spearman)."""
     if df_d5.empty or 'tipo_metrica' not in df_d5.columns:
         return pd.DataFrame()
 
@@ -402,7 +452,11 @@ def serie_estabilidade(df_d5, metodo_sel, metrica_sel, metodos_xai):
     return _prep(df_m)
 
 
+# ------------------------------------------
+# BEESWARM (estilo SHAP) EM PLOTLY
+# ------------------------------------------
 def _jitter_beeswarm(x, n_bins=30, largura_max=0.38):
+    """Deslocamento vertical (jitter) proporcional à densidade local de x."""
     x = np.asarray(x, dtype=float)
     n = len(x)
     y = np.zeros(n)
@@ -438,6 +492,16 @@ def construir_beeswarm(
     label_ds,
     col_valor_feature=None,
 ):
+    """Beeswarm das atribuições XAI por feature para um método e uma época.
+
+    - Eixo Y: features ordenadas por média de |atribuição| (mais importante no
+      topo).
+    - Eixo X: atribuição de cada instância. Para métodos individuais usa o valor
+      BRUTO (oficial, sem normalização); para a MÉDIA GERAL usa o valor
+      normalizado, pois os métodos têm escalas diferentes.
+    - Cor: valor original da feature (baixo -> alto), se a coluna existir; caso
+      contrário, |atribuição|.
+    """
     fig = go.Figure()
     titulo = f'Beeswarm de Atribuições XAI - {label_metodo} - Época {epoca_alvo}'
 
@@ -465,6 +529,7 @@ def construir_beeswarm(
     if df.empty:
         return _vazio('Sem dados para o método/época selecionados.')
 
+    # Escolha da escala do eixo X: Valores BRUTOS para modelos individuais e NORMALIZADOS para a Média Geral
     is_comb = str(metodo_sel) == METODO_COMBINADO
     if not is_comb and 'valor_atribuicao_bruto' in df.columns:
         col_x = 'valor_atribuicao_bruto'
@@ -485,6 +550,7 @@ def construir_beeswarm(
         else None
     )
 
+    # Ordenação global das features (mais importante por último => topo do eixo)
     imp = (
         df.groupby('feature')[col_x]
         .apply(lambda s: s.abs().mean())
@@ -567,6 +633,7 @@ def construir_beeswarm(
         )
     )
 
+    # Realce das instâncias selecionadas (anel amarelo)
     if selecionadas:
         mask = np.isin(inst_all, list(selecionadas))
         if mask.any():
@@ -673,6 +740,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
     else:
         df_d3['instancia_id'] = df_d3['instancia_id'].astype(str)
 
+    # Método XAI combinado (após a normalização por método)
     df_d3 = combinar_metodos_xai(
         df_d3,
         ['epoca', 'instancia_id', 'feature'],
@@ -710,7 +778,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
         else (df_d2.columns[2] if len(df_d2.columns) > 2 else acc_col)
     )
 
-    df_d2_sub = df_d2[['epoca', acc_col, loss_col']].copy()
+    df_d2_sub = df_d2[['epoca', acc_col, loss_col]].copy()
     df_d2_sub.columns = ['epoca', 'accuracy', 'loss_validacao']
     df_d2_sub['epoca'] = (
         pd.to_numeric(df_d2_sub['epoca'], errors='coerce').fillna(0).astype(int)
@@ -788,16 +856,6 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
                     if not isinstance(row_d['classe_predita'], pd.Series)
                     else row_d['classe_predita'].iloc[0]
                 )
-                c_real = int(
-                    row_o['classe_real']
-                    if not isinstance(row_o['classe_real'], pd.Series)
-                    else row_o['classe_real'].iloc[0]
-                )
-
-                # Classificação de Assertividade (Matriz de Confusão para o fluxo)
-                # 0 = Acerto, 1 = Erro
-                assert_orig = 0 if (c_orig == c_real) else 1
-                assert_dest = 0 if (c_dest == c_real) else 1
 
                 transicoes.append({
                     'metodo_xai': m,
@@ -806,9 +864,11 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
                     'instancia_id': str(inst_id),
                     'classe_origem': c_orig,
                     'classe_destino': c_dest,
-                    'assert_origem': assert_orig,
-                    'assert_destino': assert_dest,
-                    'classe_real': c_real,
+                    'classe_real': int(
+                        row_o['classe_real']
+                        if not isinstance(row_o['classe_real'], pd.Series)
+                        else row_o['classe_real'].iloc[0]
+                    ),
                     'confianca_media': float(
                         (row_o['confianca_media'] + row_d['confianca_media']) / 2.0
                         if not isinstance(row_o['confianca_media'], pd.Series)
@@ -840,8 +900,6 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
             'epoca_destino',
             'classe_origem',
             'classe_destino',
-            'assert_origem',
-            'assert_destino',
         ])
         .agg(
             qtd_instancias=('instancia_id', 'count'),
@@ -861,6 +919,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
 
 @lru_cache(maxsize=8)
 def obter_sankey(dataset_sel):
+    """Sankey processado (cacheado por dataset). Não modificar in-place."""
     df_d3_s, df_d2_s = carregar_dados_sankey(dataset_sel)
     return processar_dados_sankey(df_d3_s, df_d2_s, dataset_sel, normalizar=True)
 
@@ -949,10 +1008,11 @@ BADGE_LIMPAR = dbc.Badge(
     },
 )
 
+# Seleção da forma de ordenar (ranking) as features do heatmap
 CONTROLE_HEATMAP_ORDEM = html.Div(
     [
         html.Label('Ordenar features por:', style=ESTILO_LABEL),
-        dcc.Dropdown(
+        dcc.RadioItems(
             id='heatmap-ordem',
             options=[
                 {
@@ -965,8 +1025,9 @@ CONTROLE_HEATMAP_ORDEM = html.Div(
                 },
             ],
             value='media',
-            clearable=False,
-            style={'fontSize': '11px', 'marginBottom': '8px'},
+            inline=True,
+            inputStyle={'marginLeft': '12px', 'marginRight': '4px'},
+            style={'fontSize': '11px', 'color': '#334155'},
         ),
     ],
     style={'marginBottom': '8px'},
@@ -1042,12 +1103,11 @@ SIDEBAR = dbc.Col(
                     'Cores (Sankey):',
                     'dropdown-cor-metrica',
                     [
-                        {'label': 'Assertividade (Matriz de Confusão)', 'value': 'assertividade'},
                         {'label': 'Classe Predita', 'value': 'classe'},
                         {'label': 'Confiança', 'value': 'confianca'},
                         {'label': 'Taxa de Erro', 'value': 'erro'},
                     ],
-                    'assertividade',
+                    'classe',
                 ),
                 html.Hr(style={'borderColor': '#cbd5e1', 'margin': '10px 0'}),
                 html.Div(
@@ -1119,15 +1179,18 @@ ABA_XAI = dbc.Tab(
     children=[
         html.Div(
             [
+                # 1. Sankey
                 dbc.Row([
                     coluna(
                         card_grafico(
-                            'Fluxos Temporais de Transição Híbrida (Desempenho + Matriz de Confusão no Sankey)',
+                            'Fluxos Temporais de Transição de Classe (Sankey'
+                            ' Reativo ao XAI)',
                             'sankey-graph',
                             '530px',
                         )
                     )
                 ]),
+                # 2. Heatmap (segue o "Método XAI" principal) e Estabilidade
                 dbc.Row([
                     coluna(
                         card_grafico(
@@ -1147,6 +1210,7 @@ ABA_XAI = dbc.Tab(
                         lg=5,
                     ),
                 ]),
+                # 3. Espaço 2D + Beeswarm
                 dbc.Row([
                     coluna(
                         card_grafico(
@@ -1167,12 +1231,14 @@ ABA_XAI = dbc.Tab(
                         lg=5,
                     ),
                 ]),
+                # 4. Tabela Auxiliar de Instâncias
                 dbc.Row([
                     coluna(
                         dbc.Card(
                             [
                                 dbc.CardHeader(
-                                    'Tabela Auxiliar de Instâncias (Seleção por Brushing)',
+                                    'Tabela Auxiliar de Instâncias (Seleção por'
+                                    ' Brushing) ',
                                     style=ESTILO_HEADER,
                                 ),
                                 dbc.CardBody([TABELA_INSTANCIAS]),
@@ -1197,7 +1263,8 @@ ABA_VALIDACAO = dbc.Tab(
                 dbc.Row([
                     coluna(
                         card_grafico(
-                            'Evolução da Performance do Modelo (Acurácia & Loss)',
+                            'Evolução da Performance do Modelo (Acurácia &'
+                            ' Loss)',
                             'performance-graph',
                             '400px',
                         )
@@ -1214,7 +1281,8 @@ ABA_VALIDACAO = dbc.Tab(
                     ),
                     coluna(
                         card_grafico(
-                            'Métricas de Classificação (Precision, Recall, F1 & AUC)',
+                            'Métricas de Classificação (Precision, Recall, F1 &'
+                            ' AUC)',
                             'class-metrics-graph',
                             '360px',
                         ),
@@ -1272,6 +1340,11 @@ app.layout = html.Div([
 ])
 
 
+# ==========================================
+# 3. CALLBACKS DE ATUALIZAÇÃO
+# ==========================================
+
+
 @app.callback(
     [
         Output('dropdown-metodo', 'options'),
@@ -1327,6 +1400,7 @@ def update_options(dataset_sel):
     )
 
 
+# CALLBACK CENTRAL DE ESTADO
 @app.callback(
     [
         Output('store-instancias-selecionadas', 'data'),
@@ -1387,6 +1461,7 @@ def gerenciar_estado_selecao(
 
     selected_ids = []
 
+    # 1. CLIQUE NO BEESWARM (seleciona/deseleciona a instância clicada)
     if (
         triggered_id == 'beeswarm-graph'
         and clickDataBeeswarm
@@ -1401,6 +1476,7 @@ def gerenciar_estado_selecao(
             else:
                 return [inst_id], inst_id
 
+    # 2. SELEÇÃO VIA SANKEY
     if (
         triggered_id == 'sankey-graph'
         and clickDataSankey
@@ -1445,6 +1521,7 @@ def gerenciar_estado_selecao(
 
                     return ids_sankey, None
 
+    # 3. SELEÇÃO VIA BRUSHING NO SPATIAL SCATTER (2D)
     if triggered_id == 'dim-scatter-graph':
         if (
             selectedDataScatter is not None
@@ -1472,6 +1549,7 @@ def gerenciar_estado_selecao(
                     return [], None
                 return [inst_id], None
 
+    # 4. SELEÇÃO VIA TABELA
     if (
         triggered_id == 'dim-tabela-instancias'
         and selected_rows_table
@@ -1485,6 +1563,7 @@ def gerenciar_estado_selecao(
     return state_selected_ids or [], state_last_box
 
 
+# CALLBACK PRINCIPAL DOS GRÁFICOS
 @app.callback(
     [
         Output('performance-graph', 'figure'),
@@ -1530,11 +1609,12 @@ def update_all_graphs(
 ):
     bundle = carregar_bundle(dataset_sel)
     df_d2 = bundle['d2']
-    df_d3 = bundle['d3']
-    df_d4 = bundle['d4']
+    df_d3 = bundle['d3']  # normalizado por método + método combinado (+ bruto)
+    df_d4 = bundle['d4']  # já normalizado por método + método combinado
     df_d5 = bundle['d5']
-    df_d6 = bundle['d6']
+    df_d6 = bundle['d6']  # inclui o método combinado
     col_valor_feature = bundle['col_valor_feature']
+    # Versão sem o método combinado (evita duplicar contagens nas métricas)
     df_d6_orig = (
         df_d6[df_d6['metodo_xai'].astype(str) != METODO_COMBINADO]
         if (not df_d6.empty and 'metodo_xai' in df_d6.columns)
@@ -1559,6 +1639,9 @@ def update_all_graphs(
         ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
     )
 
+    # ----------------------------------------------------
+    # 1. GRAPH 1: PERFORMANCE DO MODELO
+    # ----------------------------------------------------
     fig_perf = go.Figure()
     if not df_d2.empty:
         acc_col = (
@@ -1612,7 +1695,11 @@ def update_all_graphs(
         template='plotly_white',
     )
 
+    # ----------------------------------------------------
+    # 2. GRAPH 2: ESTABILIDADE DAS EXPLICAÇÕES
+    # ----------------------------------------------------
     fig_stab = go.Figure()
+
     cores_metodos = {
         m: PALETA_METODOS[i % len(PALETA_METODOS)]
         for i, m in enumerate(metodos_xai)
@@ -1666,6 +1753,9 @@ def update_all_graphs(
         template='plotly_white',
     )
 
+    # ----------------------------------------------------
+    # 3. HEATMAP DE IMPORTÂNCIA (Utiliza valores normalizados)
+    # ----------------------------------------------------
     fig_heat = go.Figure()
     heat_label = 'MÉDIA GERAL' if is_comb else str(metodo_sel).upper()
     ordem_label = (
@@ -1826,6 +1916,9 @@ def update_all_graphs(
         badge_children = []
         badge_style = {'display': 'none'}
 
+    # ----------------------------------------------------
+    # 4. REDUÇÃO DE DIMENSIONALIDADE (t-SNE / PCA)
+    # ----------------------------------------------------
     fig_tsne = go.Figure()
     if not df_d6.empty:
         epoca_alvo = (
@@ -1967,6 +2060,9 @@ def update_all_graphs(
                 clickmode='event+select',
             )
 
+    # ----------------------------------------------------
+    # 5. BEESWARM DE ATRIBUIÇÕES XAI (Valores Originais)
+    # ----------------------------------------------------
     epoca_beeswarm = epoca_proj_sel if epoca_proj_sel else 1
     fig_beeswarm = construir_beeswarm(
         df_d3,
@@ -1978,6 +2074,9 @@ def update_all_graphs(
         col_valor_feature=col_valor_feature,
     )
 
+    # ----------------------------------------------------
+    # 6. SANKEY TEMPORAL DE EXPLICAÇÕES
+    # ----------------------------------------------------
     fig_sankey = go.Figure()
     if not df_sankey_processed.empty:
         metodos_validos = df_sankey_processed['metodo_xai'].unique()
@@ -2032,21 +2131,9 @@ def update_all_graphs(
                     values.append(val_fluxo)
 
                     conf = float(row['confianca_media'])
-                    alpha = max(0.35, min(0.85, conf))
+                    alpha = max(0.30, min(0.85, conf))
 
-                    # Regra de coloração unificada baseada na seleção
-                    if cor_sankey_sel == 'assertividade':
-                        ao = int(row['assert_origem'])  # 0: acerto, 1: erro
-                        ad = int(row['assert_destino'])
-                        if ao == 0 and ad == 0:
-                            base_rgb = '5, 150, 105'     # Verde Esmeralda (Mantido Acerto)
-                        elif ao == 1 and ad == 0:
-                            base_rgb = '16, 185, 129'    # Verde Claro (Corrigido / Erro -> Acerto)
-                        elif ao == 0 and ad == 1:
-                            base_rgb = '245, 158, 11'    # Âmbar / Amarelo (Instabilidade / Acerto -> Erro)
-                        else:
-                            base_rgb = '220, 38, 38'     # Vermelho (Erro Persistente)
-                    elif cor_sankey_sel == 'classe':
+                    if cor_sankey_sel == 'classe':
                         base_rgb = (
                             '37, 99, 235' if row['classe_origem'] == 0 else '249, 115, 22'
                         )
@@ -2100,7 +2187,7 @@ def update_all_graphs(
             )
             fig_sankey.update_layout(
                 title_text=(
-                    'Transições Temporais Híbridas (Desempenho + Matriz de Confusão)'
+                    'Transições Temporais de Explicações'
                     f' ({"MÉDIA GERAL" if m_alvo == METODO_COMBINADO else m_alvo})'
                     f' - {label_ds}'
                 ),
@@ -2109,6 +2196,9 @@ def update_all_graphs(
                 template='plotly_white',
             )
 
+    # ----------------------------------------------------
+    # 7. MATRIZ DE CONFUSÃO
+    # ----------------------------------------------------
     fig_cm = go.Figure()
     epoca_alvo_val = epoca_proj_sel if epoca_proj_sel else 1
     if not df_d6_orig.empty:
@@ -2139,6 +2229,9 @@ def update_all_graphs(
                 template='plotly_white',
             )
 
+    # ----------------------------------------------------
+    # 8. MÉTRICAS DE CLASSIFICAÇÃO
+    # ----------------------------------------------------
     fig_class_metrics = go.Figure()
     if not df_d6_orig.empty:
         df_ep_val = df_d6_orig[df_d6_orig['epoca'] == int(epoca_alvo_val)].copy()
@@ -2187,6 +2280,9 @@ def update_all_graphs(
                 template='plotly_white',
             )
 
+    # ----------------------------------------------------
+    # 9. DISTRIBUIÇÃO DOS ERROS DE PREDIÇÃO
+    # ----------------------------------------------------
     fig_err_dist = go.Figure()
     if not df_d6_orig.empty and 'erro_predicao' in df_d6_orig.columns:
         df_d6_copy = df_d6_orig.copy()
@@ -2236,6 +2332,7 @@ def update_all_graphs(
     )
 
 
+# CALLBACK TABELA
 @app.callback(
     Output('dim-tabela-instancias', 'data'),
     [
@@ -2297,7 +2394,6 @@ def update_table_from_store(
         df_tabela = df_sub
 
     return df_tabela.to_dict('records')
-
 
 if __name__ == '__main__':
     app.run(debug=False)
