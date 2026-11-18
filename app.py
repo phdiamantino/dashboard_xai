@@ -64,6 +64,18 @@ COLUNAS_CONHECIDAS = {
 # Máximo de features exibidas no beeswarm
 MAX_FEATURES_BEESWARM = 15
 
+# Cores (r, g, b) das categorias de assertividade no Sankey
+CORES_ASSERTIVIDADE = {
+    'acerto': '31, 157, 107',
+    'erro': '209, 52, 74',
+    'instavel': '224, 160, 48',
+}
+LABEL_ASSERTIVIDADE = {
+    'acerto': 'Acerto mantido',
+    'erro': 'Erro persistente',
+    'instavel': 'Predição mudou',
+}
+
 
 def preparar_dados():
     if not glob.glob('**/*.csv', recursive=True):
@@ -281,7 +293,7 @@ def _d6_combinado(df_d6, df_d3):
 
     As coordenadas t-SNE de métodos diferentes vivem em espaços diferentes, então
     não faz sentido tirar a média delas. O método combinado usa um PCA conjunto
-    (todas las épocas) sobre as atribuições combinadas. Se não for possível,
+    (todas as épocas) sobre as atribuições combinadas. Se não for possível,
     usa a média das coordenadas como fallback.
     """
     req = ['metodo_xai', 'epoca', 'instancia_id']
@@ -857,6 +869,17 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
                     else row_d['classe_predita'].iloc[0]
                 )
 
+                # Assertividade do fluxo (matriz de confusão temporal):
+                # instavel = a predição mudou entre as duas épocas;
+                # acerto/erro = predição mantida e igual / diferente da classe real.
+                c_real = int(np.atleast_1d(row_o['classe_real'])[0])
+                if c_orig != c_dest:
+                    categoria = 'instavel'
+                elif c_dest == c_real:
+                    categoria = 'acerto'
+                else:
+                    categoria = 'erro'
+
                 transicoes.append({
                     'metodo_xai': m,
                     'epoca_origem': ep_origem,
@@ -864,11 +887,8 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
                     'instancia_id': str(inst_id),
                     'classe_origem': c_orig,
                     'classe_destino': c_dest,
-                    'classe_real': int(
-                        row_o['classe_real']
-                        if not isinstance(row_o['classe_real'], pd.Series)
-                        else row_o['classe_real'].iloc[0]
-                    ),
+                    'categoria': categoria,
+                    'classe_real': c_real,
                     'confianca_media': float(
                         (row_o['confianca_media'] + row_d['confianca_media']) / 2.0
                         if not isinstance(row_o['confianca_media'], pd.Series)
@@ -900,6 +920,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
             'epoca_destino',
             'classe_origem',
             'classe_destino',
+            'categoria',
         ])
         .agg(
             qtd_instancias=('instancia_id', 'count'),
@@ -919,9 +940,86 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
 
 @lru_cache(maxsize=8)
 def obter_sankey(dataset_sel):
-    """Sankey processado (cacheado por dataset). Não modificar in-place."""
+    """Sankey processado (cacheado por dataset). Não modificar in-place.
+
+    O CSV de explicações (D3) não traz classe real/predita; elas são lidas do D6
+    (projeção), o mesmo arquivo usado no scatter 2D, na tabela e na matriz de
+    confusão. Assim o Sankey fica consistente com o resto do dashboard.
+    """
     df_d3_s, df_d2_s = carregar_dados_sankey(dataset_sel)
+    d6 = carregar_csv_seguro('projecao_tsne_epocas', dataset_sel)
+    if (
+        not df_d3_s.empty
+        and not d6.empty
+        and {'epoca', 'instancia_id', 'classe_real', 'classe_predita'}.issubset(
+            d6.columns
+        )
+    ):
+        cls = (
+            d6[['epoca', 'instancia_id', 'classe_real', 'classe_predita']]
+            .assign(instancia_id=lambda x: x['instancia_id'].astype(str))
+            .drop_duplicates(['epoca', 'instancia_id'])
+        )
+        df_d3_s = (
+            df_d3_s.assign(instancia_id=df_d3_s['instancia_id'].astype(str))
+            .drop(
+                columns=[
+                    c
+                    for c in ['classe_real', 'classe_predita']
+                    if c in df_d3_s.columns
+                ]
+            )
+            .merge(cls, on=['epoca', 'instancia_id'], how='inner')
+        )
     return processar_dados_sankey(df_d3_s, df_d2_s, dataset_sel, normalizar=True)
+
+
+@lru_cache(maxsize=32)
+def info_nos(dataset_sel, metodo):
+    """Resumo explicativo de cada nó do Sankey (época, classe predita).
+
+    Retorna {(epoca, classe): (feature_lider, participacao, concentracao)}:
+    - feature_lider: feature de maior importância média entre as instâncias do nó;
+    - participacao: fatia da importância total que ela concentra (0-1);
+    - concentracao: 1 - entropia normalizada da distribuição de importâncias
+      (0 = explicação difusa; 1 = concentrada em uma única feature).
+    """
+    bundle = carregar_bundle(dataset_sel)
+    d3, d6 = bundle['d3'], bundle['d6']
+    need = {'metodo_xai', 'epoca', 'instancia_id', 'feature', 'importancia_absoluta'}
+    if (
+        d3.empty
+        or d6.empty
+        or not need.issubset(d3.columns)
+        or 'classe_predita' not in d6.columns
+    ):
+        return {}
+
+    cls = d6[d6['metodo_xai'].astype(str) == str(metodo)][
+        ['epoca', 'instancia_id', 'classe_predita']
+    ].drop_duplicates(['epoca', 'instancia_id'])
+    cls = cls.assign(instancia_id=cls['instancia_id'].astype(str))
+
+    x = d3[d3['metodo_xai'].astype(str) == str(metodo)]
+    x = x.assign(instancia_id=x['instancia_id'].astype(str)).merge(
+        cls, on=['epoca', 'instancia_id']
+    )
+    if x.empty:
+        return {}
+
+    g = x.groupby(['epoca', 'classe_predita', 'feature'])[
+        'importancia_absoluta'
+    ].mean()
+    out = {}
+    for (ep, cl), s in g.groupby(level=[0, 1]):
+        s = s.droplevel([0, 1])
+        tot = s.sum()
+        if tot <= 0:
+            continue
+        p = s / tot
+        h = -(p * np.log(p.clip(lower=1e-12))).sum() / np.log(max(len(p), 2))
+        out[(int(ep), int(cl))] = (str(p.idxmax()), float(p.max()), float(1 - h))
+    return out
 
 
 # ==========================================
@@ -1104,6 +1202,10 @@ SIDEBAR = dbc.Col(
                     'dropdown-cor-metrica',
                     [
                         {'label': 'Classe Predita', 'value': 'classe'},
+                        {
+                            'label': 'Assertividade (matriz de confusão)',
+                            'value': 'assertividade',
+                        },
                         {'label': 'Confiança', 'value': 'confianca'},
                         {'label': 'Taxa de Erro', 'value': 'erro'},
                     ],
@@ -2075,7 +2177,10 @@ def update_all_graphs(
     )
 
     # ----------------------------------------------------
-    # 6. SANKEY TEMPORAL DE EXPLICAÇÕES
+    # 6. SANKEY HÍBRIDO: DESEMPENHO + EXPLICABILIDADE TEMPORAL
+    #    - Fluxos: classe/confiança/erro ou assertividade (matriz de confusão)
+    #    - Nós: feature líder (★) no rótulo, ◆ quando ela muda em relação à
+    #      época anterior, e cor pela concentração da explicação
     # ----------------------------------------------------
     fig_sankey = go.Figure()
     if not df_sankey_processed.empty:
@@ -2104,8 +2209,9 @@ def update_all_graphs(
                 )
             )
             classes_unicas = [0, 1]
+            nos = info_nos(dataset_sel, m_alvo)
 
-            node_labels, node_x, node_y = [], [], []
+            node_labels, node_x, node_y, node_colors = [], [], [], []
             node_dict = {}
 
             for i_ep, ep in enumerate(epocas_unicas):
@@ -2113,7 +2219,29 @@ def update_all_graphs(
                     node_id = len(node_labels)
                     node_dict[f'E{ep}_C{cl}'] = node_id
                     nome_classe = map_cls.get(cl, f'Classe {cl}')
-                    node_labels.append(f'Época {ep}<br>{nome_classe}')
+
+                    info = nos.get((int(ep), int(cl)))
+                    if info:
+                        feat, share, conc = info
+                        ant = (
+                            nos.get((int(epocas_unicas[i_ep - 1]), int(cl)))
+                            if i_ep > 0
+                            else None
+                        )
+                        mudou = ' ◆' if ant and ant[0] != feat else ''
+                        node_labels.append(
+                            f'Época {ep}<br>{nome_classe}'
+                            f'<br>★ {feat} ({share:.0%}){mudou}'
+                        )
+                        node_colors.append(
+                            px.colors.sample_colorscale(
+                                'Blues', [0.15 + 0.8 * conc]
+                            )[0]
+                        )
+                    else:
+                        node_labels.append(f'Época {ep}<br>{nome_classe}')
+                        node_colors.append('#e2e8f0')
+
                     x_pos = 0.05 + 0.9 * (i_ep / max(1, len(epocas_unicas) - 1))
                     y_pos = 0.2 if cl == 0 else 0.8
                     node_x.append(x_pos)
@@ -2137,6 +2265,10 @@ def update_all_graphs(
                         base_rgb = (
                             '37, 99, 235' if row['classe_origem'] == 0 else '249, 115, 22'
                         )
+                    elif cor_sankey_sel == 'assertividade':
+                        base_rgb = CORES_ASSERTIVIDADE.get(
+                            row['categoria'], '100, 116, 139'
+                        )
                     elif cor_sankey_sel == 'confianca':
                         base_rgb = f'{int(255*(1-conf))}, {int(200*conf)}, 150'
                     else:
@@ -2150,7 +2282,9 @@ def update_all_graphs(
                         f' {m_alvo}<br><b>Transição:</b> Época {row["epoca_origem"]}'
                         f' &rarr; Época {row["epoca_destino"]}<br><b>Classe Predita:</b>'
                         f' {map_cls.get(row["classe_origem"])} &rarr;'
-                        f' {map_cls.get(row["classe_destino"])}<br><b>Classe Real'
+                        f' {map_cls.get(row["classe_destino"])}<br><b>Assertividade:</b>'
+                        f' {LABEL_ASSERTIVIDADE.get(row["categoria"], row["categoria"])}'
+                        f'<br><b>Classe Real'
                         ' Dominante:</b>'
                         f' {map_cls.get(row["classe_real_dominante"])}<br><b>Qtd'
                         f' Instâncias:</b> {row["qtd_instancias"]}<br><b>Exemplo ID:</b>'
@@ -2172,7 +2306,7 @@ def update_all_graphs(
                             label=node_labels,
                             x=node_x,
                             y=node_y,
-                            color='#e2e8f0',
+                            color=node_colors,
                         ),
                         link=dict(
                             source=sources,
@@ -2189,7 +2323,8 @@ def update_all_graphs(
                 title_text=(
                     'Transições Temporais de Explicações'
                     f' ({"MÉDIA GERAL" if m_alvo == METODO_COMBINADO else m_alvo})'
-                    f' - {label_ds}'
+                    f' - {label_ds} | ★ feature líder · ◆ mudou · nó escuro ='
+                    ' explicação concentrada'
                 ),
                 font_size=12,
                 margin=dict(l=20, r=20, t=50, b=20),
@@ -2394,6 +2529,7 @@ def update_table_from_store(
         df_tabela = df_sub
 
     return df_tabela.to_dict('records')
+
 
 if __name__ == '__main__':
     app.run(debug=False)
