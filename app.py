@@ -111,6 +111,13 @@ COLORSCALE_BLUES_20 = [
 # Escala azul -> vermelho no estilo do beeswarm do SHAP
 COLORSCALE_BEESWARM = [[0.0, '#008bfb'], [1.0, '#ff0051']]
 
+# Escala divergente para atribuições de feature no 2D (Negativo/Classe 0 -> Neutro -> Positivo/Classe 1)
+COLORSCALE_ATRIBUICAO_2D = [
+    [0.0, '#008bfb'],
+    [0.5, '#f8fafc'],
+    [1.0, '#ff0051'],
+]
+
 # ==========================================
 # 1. MAPEAMENTO, NORMALIZAÇÃO E CARREGAMENTO
 # ==========================================
@@ -236,12 +243,7 @@ def carregar_csv_seguro(nome_base, dataset_sel):
 
 
 def detectar_col_valor_feature(df_cru, dataset_sel):
-    """Descobre a coluna com o valor ORIGINAL da feature nos dados crus.
-
-    Usa COL_VALOR_FEATURE, se definido. Caso contrário, procura colunas numéricas
-    que o dashboard não conhece: se houver exatamente uma, é a escolhida. Em
-    qualquer outro caso retorna None e imprime as colunas para conferência.
-    """
+    """Descobre a coluna com o valor ORIGINAL da feature nos dados crus."""
     if df_cru.empty:
         return None
 
@@ -277,13 +279,7 @@ def detectar_col_valor_feature(df_cru, dataset_sel):
 
 
 def _d6_combinado(df_d6, df_d3):
-    """Projeção 2D do método combinado.
-
-    As coordenadas t-SNE de métodos diferentes vivem em espaços diferentes, então
-    não faz sentido tirar a média delas. O método combinado usa um PCA conjunto
-    (todas las épocas) sobre as atribuições combinadas. Se não for possível,
-    usa a média das coordenadas como fallback.
-    """
+    """Projeção 2D do método combinado."""
     req = ['metodo_xai', 'epoca', 'instancia_id']
     if df_d6.empty or any(c not in df_d6.columns for c in req):
         return df_d6
@@ -299,7 +295,6 @@ def _d6_combinado(df_d6, df_d3):
     comb = base.drop_duplicates(['epoca', 'instancia_id']).copy()
     comb['metodo_xai'] = METODO_COMBINADO
 
-    # Fallback: média das coordenadas entre os métodos
     if len(coords) == 2:
         medias = base.groupby(['epoca', 'instancia_id'], as_index=False)[coords].mean()
         comb = comb.drop(columns=coords).merge(
@@ -330,19 +325,13 @@ def _d6_combinado(df_d6, df_d3):
 
 @lru_cache(maxsize=8)
 def carregar_bundle(dataset_sel):
-    """Carrega e prepara todos os dados do dataset (com o método combinado).
-
-    Os DataFrames retornados são compartilhados via cache: não modificar
-    in-place (use .copy()).
-    """
+    """Carrega e prepara todos os dados do dataset (com o método combinado)."""
     df_d2 = carregar_csv_seguro('metricas_epocas', dataset_sel)
     df_d3 = carregar_csv_seguro('explicacoes_instancias', dataset_sel)
     df_d4 = carregar_csv_seguro('resumo_explicacoes', dataset_sel)
     df_d5 = carregar_csv_seguro('metricas_estabilidade_concordancia', dataset_sel)
     df_d6 = carregar_csv_seguro('projecao_tsne_epocas', dataset_sel)
 
-    # D3: ANTES de normalizar, identifica a coluna do valor original da feature
-    # e preserva a atribuição bruta (valores oficiais, sem normalização) para o beeswarm.
     col_valor_feature = detectar_col_valor_feature(df_d3, dataset_sel)
 
     if not df_d3.empty and 'valor_atribuicao' in df_d3.columns:
@@ -414,8 +403,7 @@ def carregar_bundle(dataset_sel):
 
 
 def serie_estabilidade(df_d5, metodo_sel, metrica_sel, metodos_xai):
-    """Série de estabilidade; para o método combinado, média entre os métodos
-    (cada um normalizado individualmente quando a métrica não é Spearman)."""
+    """Série de estabilidade; para o método combinado, média entre os métodos."""
     if df_d5.empty or 'tipo_metrica' not in df_d5.columns:
         return pd.DataFrame()
 
@@ -491,17 +479,9 @@ def construir_beeswarm(
     label_metodo,
     label_ds,
     col_valor_feature=None,
+    feature_ativa=None,
 ):
-    """Beeswarm das atribuições XAI por feature para um método e uma época.
-
-    - Eixo Y: features ordenadas por média de |atribuição| (mais importante no
-      topo).
-    - Eixo X: atribuição de cada instância. Para métodos individuais usa o valor
-      BRUTO (oficial, sem normalização); para a MÉDIA GERAL usa o valor
-      normalizado, pois os métodos têm escalas diferentes.
-    - Cor: valor original da feature (baixo -> alto), se a coluna existir; caso
-      contrário, |atribuição|.
-    """
+    """Beeswarm das atribuições XAI por feature para um método e uma época."""
     fig = go.Figure()
     titulo = f'Beeswarm de Atribuições XAI - {label_metodo} - Época {epoca_alvo}'
 
@@ -529,7 +509,6 @@ def construir_beeswarm(
     if df.empty:
         return _vazio('Sem dados para o método/época selecionados.')
 
-    # Escolha da escala do eixo X: Valores BRUTOS para modelos individuais e NORMALIZADOS para a Média Geral
     is_comb = str(metodo_sel) == METODO_COMBINADO
     if not is_comb and 'valor_atribuicao_bruto' in df.columns:
         col_x = 'valor_atribuicao_bruto'
@@ -550,7 +529,6 @@ def construir_beeswarm(
         else None
     )
 
-    # Ordenação global das features (mais importante por último => topo do eixo)
     imp = (
         df.groupby('feature')[col_x]
         .apply(lambda s: s.abs().mean())
@@ -600,6 +578,42 @@ def construir_beeswarm(
     c_all = np.concatenate(cores)
     cd_all = np.vstack(cds)
     inst_all = np.concatenate(insts)
+
+    # Faixa sutil de destaque na linha da feature selecionada para colorir o 2D
+    if feature_ativa and feature_ativa in top:
+        idx_ativa = top.index(feature_ativa)
+        fig.add_hrect(
+            y0=idx_ativa - 0.45,
+            y1=idx_ativa + 0.45,
+            fillcolor='rgba(37, 99, 235, 0.10)',
+            line_width=1,
+            line_color='rgba(37, 99, 235, 0.35)',
+        )
+
+    # Marcadores clicáveis por linha/feature (permite clicar na linha da feature para pintar o 2D)
+    x_min_pad = float(x_all.min()) - 0.08 * max(float(np.ptp(x_all)), 1e-3)
+    fig.add_trace(
+        go.Scatter(
+            x=[x_min_pad] * len(top),
+            y=list(range(len(top))),
+            mode='markers',
+            marker=dict(
+                size=16,
+                symbol='diamond',
+                color=[
+                    '#2563eb' if f == feature_ativa else 'rgba(148, 163, 184, 0.35)'
+                    for f in top
+                ],
+                line=dict(width=1, color='#475569'),
+            ),
+            customdata=[['__FEATURE_ONLY__', f] for f in top],
+            showlegend=False,
+            hovertemplate=(
+                '<b>Feature:</b> %{customdata[1]}<br>'
+                '<i>Clique para pintar o gráfico 2D com esta feature</i><extra></extra>'
+            ),
+        )
+    )
 
     titulo_cor = 'Valor da feature' if col_val is not None else '|Atribuição|'
     fig.add_trace(
@@ -652,6 +666,10 @@ def construir_beeswarm(
                 )
             )
 
+    tick_labels = [
+        f'<b>▶ {f}</b>' if f == feature_ativa else f for f in top
+    ]
+
     fig.add_vline(x=0, line_width=1, line_color='#94a3b8')
     fig.update_layout(
         title=titulo,
@@ -664,7 +682,7 @@ def construir_beeswarm(
         yaxis=dict(
             tickmode='array',
             tickvals=list(range(len(top))),
-            ticktext=top,
+            ticktext=tick_labels,
             automargin=True,
             tickfont=dict(size=10),
         ),
@@ -740,7 +758,6 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
     else:
         df_d3['instancia_id'] = df_d3['instancia_id'].astype(str)
 
-    # Método XAI combinado (após a normalização por método)
     df_d3 = combinar_metodos_xai(
         df_d3,
         ['epoca', 'instancia_id', 'feature'],
@@ -964,7 +981,7 @@ def card_grafico(
         header = dbc.CardHeader(titulo, style=ESTILO_HEADER)
     else:
         header = dbc.CardHeader(
-            [html.Span(titulo), header_extra],
+            [html.Span(titulo), html.Div(header_extra)],
             className='d-flex justify-content-between align-items-center',
             style=ESTILO_HEADER,
         )
@@ -997,6 +1014,20 @@ CONFIG_SCATTER = {
 BADGE_LIMPAR = dbc.Badge(
     id='badge-limpar-sankey',
     color='danger',
+    className='ms-2',
+    style={
+        'cursor': 'pointer',
+        'fontSize': '11px',
+        'padding': '5px 9px',
+        'borderRadius': '12px',
+        'boxShadow': '0 2px 4px rgba(0,0,0,0.1)',
+        'display': 'none',
+    },
+)
+
+BADGE_LIMPAR_FEATURE = dbc.Badge(
+    id='badge-limpar-feature',
+    color='primary',
     className='ms-2',
     style={
         'cursor': 'pointer',
@@ -1194,7 +1225,8 @@ ABA_XAI = dbc.Tab(
                 dbc.Row([
                     coluna(
                         card_grafico(
-                            'Resumo Global / Heatmap de Importância Temporal',
+                            'Resumo Global / Heatmap de Importância Temporal'
+                            ' (clique em uma linha para colorir o 2D)',
                             'heatmap-graph',
                             '500px',
                             corpo_extra=CONTROLE_HEATMAP_ORDEM,
@@ -1218,13 +1250,14 @@ ABA_XAI = dbc.Tab(
                             'dim-scatter-graph',
                             '520px',
                             config=CONFIG_SCATTER,
-                            header_extra=BADGE_LIMPAR,
+                            header_extra=[BADGE_LIMPAR_FEATURE, BADGE_LIMPAR],
                         ),
                         lg=7,
                     ),
                     coluna(
                         card_grafico(
-                            'Beeswarm de Atribuições XAI por Feature',
+                            'Beeswarm de Atribuições XAI por Feature'
+                            ' (clique na feature para colorir o 2D)',
                             'beeswarm-graph',
                             '520px',
                         ),
@@ -1307,6 +1340,7 @@ ABA_VALIDACAO = dbc.Tab(
 app.layout = html.Div([
     dcc.Store(id='store-instancias-selecionadas', data=[]),
     dcc.Store(id='store-ultimo-click-box', data=None),
+    dcc.Store(id='store-feature-selecionada', data=None),
     dbc.NavbarSimple(
         brand='Dashboard Analítico XAI - Diagnóstico Temporal por Épocas',
         color='dark',
@@ -1400,7 +1434,71 @@ def update_options(dataset_sel):
     )
 
 
-# CALLBACK CENTRAL DE ESTADO
+# CALLBACK PARA FEATURE SELECIONADA (CLIQUE NO HEATMAP OU BEESWARM)
+@app.callback(
+    Output('store-feature-selecionada', 'data'),
+    [
+        Input('heatmap-graph', 'clickData'),
+        Input('beeswarm-graph', 'clickData'),
+        Input('badge-limpar-feature', 'n_clicks'),
+        Input('dim-dropdown-cor', 'value'),
+        Input('dropdown-dataset', 'value'),
+        Input('dropdown-metodo', 'value'),
+    ],
+    [State('store-feature-selecionada', 'data')],
+)
+def gerenciar_feature_selecionada(
+    clickDataHeatmap,
+    clickDataBeeswarm,
+    btn_limpar_feature,
+    cor_proj_sel,
+    dataset_sel,
+    metodo_sel,
+    feature_atual,
+):
+    ctx = callback_context
+    triggered_id = (
+        ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+    )
+
+    if triggered_id in [
+        'badge-limpar-feature',
+        'dim-dropdown-cor',
+        'dropdown-dataset',
+        'dropdown-metodo',
+    ]:
+        return None
+
+    # Clique no Heatmap -> pega o nome da feature no eixo Y
+    if (
+        triggered_id == 'heatmap-graph'
+        and clickDataHeatmap
+        and 'points' in clickDataHeatmap
+        and len(clickDataHeatmap['points']) > 0
+    ):
+        pt_h = clickDataHeatmap['points'][0]
+        feat_clicada = pt_h.get('y')
+        if feat_clicada is not None:
+            feat_str = str(feat_clicada)
+            return None if feature_atual == feat_str else feat_str
+
+    # Clique no Beeswarm -> pega o nome da feature em customdata[1]
+    if (
+        triggered_id == 'beeswarm-graph'
+        and clickDataBeeswarm
+        and 'points' in clickDataBeeswarm
+        and len(clickDataBeeswarm['points']) > 0
+    ):
+        pt_b = clickDataBeeswarm['points'][0]
+        cd = pt_b.get('customdata')
+        if isinstance(cd, list) and len(cd) >= 2 and cd[1] is not None:
+            feat_str = str(cd[1])
+            return None if feature_atual == feat_str else feat_str
+
+    return feature_atual
+
+
+# CALLBACK CENTRAL DE ESTADO DE INSTÂNCIAS
 @app.callback(
     [
         Output('store-instancias-selecionadas', 'data'),
@@ -1461,7 +1559,7 @@ def gerenciar_estado_selecao(
 
     selected_ids = []
 
-    # 1. CLIQUE NO BEESWARM (seleciona/deseleciona a instância clicada)
+    # 1. CLIQUE NO BEESWARM
     if (
         triggered_id == 'beeswarm-graph'
         and clickDataBeeswarm
@@ -1470,6 +1568,9 @@ def gerenciar_estado_selecao(
     ):
         p_bee = clickDataBeeswarm['points'][0]
         if 'customdata' in p_bee and len(p_bee['customdata']) > 0:
+            # Se clicou apenas no marcador de seleção da feature, não altera seleção de instância
+            if str(p_bee['customdata'][0]) == '__FEATURE_ONLY__':
+                return state_selected_ids or [], state_last_box
             inst_id = str(p_bee['customdata'][0])
             if state_last_box == inst_id:
                 return [], None
@@ -1577,6 +1678,8 @@ def gerenciar_estado_selecao(
         Output('error-distribution-graph', 'figure'),
         Output('badge-limpar-sankey', 'children'),
         Output('badge-limpar-sankey', 'style'),
+        Output('badge-limpar-feature', 'children'),
+        Output('badge-limpar-feature', 'style'),
     ],
     [
         Input('dropdown-dataset', 'value'),
@@ -1589,6 +1692,7 @@ def gerenciar_estado_selecao(
         Input('dim-dropdown-cor', 'value'),
         Input('heatmap-ordem', 'value'),
         Input('store-instancias-selecionadas', 'data'),
+        Input('store-feature-selecionada', 'data'),
         Input('sankey-graph', 'clickData'),
         Input('badge-limpar-sankey', 'n_clicks'),
     ],
@@ -1604,17 +1708,18 @@ def update_all_graphs(
     cor_proj_sel,
     heatmap_ordem,
     instancias_selecionadas_store,
+    feature_selecionada,
     clickDataSankey,
     btn_badge_clicks,
 ):
     bundle = carregar_bundle(dataset_sel)
     df_d2 = bundle['d2']
-    df_d3 = bundle['d3']  # normalizado por método + método combinado (+ bruto)
-    df_d4 = bundle['d4']  # já normalizado por método + método combinado
+    df_d3 = bundle['d3']
+    df_d4 = bundle['d4']
     df_d5 = bundle['d5']
-    df_d6 = bundle['d6']  # inclui o método combinado
+    df_d6 = bundle['d6']
     col_valor_feature = bundle['col_valor_feature']
-    # Versão sem o método combinado (evita duplicar contagens nas métricas)
+
     df_d6_orig = (
         df_d6[df_d6['metodo_xai'].astype(str) != METODO_COMBINADO]
         if (not df_d6.empty and 'metodo_xai' in df_d6.columns)
@@ -1831,10 +1936,35 @@ def update_all_graphs(
                         ),
                     )
                 )
+
+                # Realce visual na linha da feature selecionada
+                if feature_selecionada and feature_selecionada in piv.index:
+                    idx_h = list(piv.index).index(feature_selecionada)
+                    fig_heat.add_shape(
+                        type='rect',
+                        x0=min(cols_list) - 0.5,
+                        x1=max(cols_list) + 0.5,
+                        y0=idx_h - 0.5,
+                        y1=idx_h + 0.5,
+                        line=dict(color='#2563eb', width=2.5),
+                        fillcolor='rgba(37, 99, 235, 0.08)',
+                    )
+
+                tick_labels_heat = [
+                    f'<b>▶ {f}</b>' if f == feature_selecionada else f
+                    for f in piv.index
+                ]
+
                 fig_heat.update_layout(
                     title=f'Heatmap de Importância Normalizada ({heat_label}) - {ordem_label}',
                     xaxis=dict(title='Época'),
-                    yaxis=dict(dtick=1, automargin=True, tickfont=dict(size=10)),
+                    yaxis=dict(
+                        tickmode='array',
+                        tickvals=list(range(len(piv.index))),
+                        ticktext=tick_labels_heat,
+                        automargin=True,
+                        tickfont=dict(size=10),
+                    ),
                     margin=dict(t=40, b=30, l=150, r=20),
                     template='plotly_white',
                 )
@@ -1920,6 +2050,8 @@ def update_all_graphs(
     # 4. REDUÇÃO DE DIMENSIONALIDADE (t-SNE / PCA)
     # ----------------------------------------------------
     fig_tsne = go.Figure()
+    feat_aplicada = None
+
     if not df_d6.empty:
         epoca_alvo = (
             epoca_proj_sel
@@ -1935,77 +2067,168 @@ def update_all_graphs(
 
         if not df_sub.empty:
             df_sub['instancia_id'] = df_sub['instancia_id'].astype(str)
-            if algo_sel == 'PCA' and not df_d3.empty:
+            df_exp_ep = pd.DataFrame()
+            if not df_d3.empty:
                 df_exp_ep = df_d3[
                     (
                         df_d3['metodo_xai'].astype(str).str.upper()
                         == str(metodo_sel).upper()
                     )
-                    & (df_d3['epoca'] == int(epoca_alvo))
+                    & (pd.to_numeric(df_d3['epoca'], errors='coerce') == int(epoca_alvo))
                 ].copy()
                 if not df_exp_ep.empty:
                     df_exp_ep['instancia_id'] = df_exp_ep['instancia_id'].astype(str)
-                    pivot_pca = df_exp_ep.pivot_table(
-                        index='instancia_id', columns='feature', values='valor_atribuicao'
-                    ).fillna(0)
-                    pca = PCA(n_components=2)
-                    res_pca = pca.fit_transform(pivot_pca.values)
-                    pca_df = pd.DataFrame(
-                        res_pca, index=pivot_pca.index, columns=['dim_1', 'dim_2']
-                    ).reset_index()
-                    df_sub = df_sub.merge(pca_df, on='instancia_id', how='left')
-                    x_col, y_col = 'dim_1', 'dim_2'
-                else:
-                    x_col, y_col = 'tsne_dim_1', 'tsne_dim_2'
+
+            if algo_sel == 'PCA' and not df_exp_ep.empty:
+                pivot_pca = df_exp_ep.pivot_table(
+                    index='instancia_id', columns='feature', values='valor_atribuicao'
+                ).fillna(0)
+                pca = PCA(n_components=2)
+                res_pca = pca.fit_transform(pivot_pca.values)
+                pca_df = pd.DataFrame(
+                    res_pca, index=pivot_pca.index, columns=['dim_1', 'dim_2']
+                ).reset_index()
+                df_sub = df_sub.merge(pca_df, on='instancia_id', how='left')
+                x_col, y_col = 'dim_1', 'dim_2'
             else:
                 x_col, y_col = 'tsne_dim_1', 'tsne_dim_2'
 
-            if cor_proj_sel == 'erro_predicao':
-                df_sub['cor_label'] = df_sub['erro_predicao'].map(
-                    {0: 'Acerto', 1: 'Erro'}
-                )
-                fig_tsne = px.scatter(
-                    df_sub,
-                    x=x_col,
-                    y=y_col,
-                    color='cor_label',
-                    color_discrete_map={'Acerto': '#059669', 'Erro': '#dc2626'},
-                    custom_data=[
-                        'instancia_id',
-                        'classe_real',
-                        'classe_predita',
-                        'erro_predicao',
-                    ],
-                )
-            else:
-                fig_tsne = px.scatter(
-                    df_sub,
-                    x=x_col,
-                    y=y_col,
-                    color=cor_proj_sel,
-                    color_continuous_scale=COLORSCALE_BLUES_20,
-                    custom_data=[
-                        'instancia_id',
-                        'classe_real',
-                        'classe_predita',
-                        'erro_predicao',
-                    ],
-                )
-                fig_tsne.update_coloraxes(
-                    colorbar=dict(tickvals=[0, 1], ticktext=['0', '1'], len=0.8)
-                )
+            # Verifica se há feature selecionada (Heatmap ou Beeswarm) para pintar o 2D
+            if (
+                feature_selecionada
+                and not df_exp_ep.empty
+                and 'feature' in df_exp_ep.columns
+            ):
+                df_feat_ep = df_exp_ep[
+                    df_exp_ep['feature'].astype(str) == str(feature_selecionada)
+                ].copy()
 
-            fig_tsne.update_traces(
-                marker=dict(
-                    size=8, opacity=0.85, line=dict(width=0.5, color='#334155')
-                ),
-                hovertemplate=(
-                    '<b>Instância ID:</b> #%{customdata[0]}<br><b>Classe Real:</b>'
-                    ' %{customdata[1]}<br><b>Classe Predita:</b>'
-                    ' %{customdata[2]}<br><b>Erro:</b> %{customdata[3]}<br><b>X:</b>'
-                    ' %{x:.3f} | <b>Y:</b> %{y:.3f}<extra></extra>'
-                ),
-            )
+                if not df_feat_ep.empty:
+                    feat_aplicada = str(feature_selecionada)
+                    col_attr = (
+                        'valor_atribuicao_bruto'
+                        if (
+                            not is_comb
+                            and 'valor_atribuicao_bruto' in df_feat_ep.columns
+                        )
+                        else 'valor_atribuicao'
+                    )
+                    df_feat_ep['attr_feature_sel'] = pd.to_numeric(
+                        df_feat_ep[col_attr], errors='coerce'
+                    ).fillna(0.0)
+
+                    cols_merge = ['instancia_id', 'attr_feature_sel']
+                    has_val_orig = (
+                        col_valor_feature
+                        and col_valor_feature in df_feat_ep.columns
+                    )
+                    if has_val_orig:
+                        df_feat_ep['val_orig_feature_sel'] = pd.to_numeric(
+                            df_feat_ep[col_valor_feature], errors='coerce'
+                        )
+                        cols_merge.append('val_orig_feature_sel')
+
+                    df_feat_ep = df_feat_ep[cols_merge].drop_duplicates('instancia_id')
+                    df_sub = df_sub.merge(df_feat_ep, on='instancia_id', how='left')
+                    df_sub['attr_feature_sel'] = df_sub['attr_feature_sel'].fillna(0.0)
+
+                    if has_val_orig:
+                        df_sub['val_orig_txt'] = df_sub['val_orig_feature_sel'].apply(
+                            lambda v: f'{v:.4f}' if pd.notna(v) else 'n/d'
+                        )
+                    else:
+                        df_sub['val_orig_txt'] = 'n/d'
+
+                    max_abs = float(df_sub['attr_feature_sel'].abs().max())
+                    if max_abs < 1e-12:
+                        max_abs = 1.0
+
+                    fig_tsne = px.scatter(
+                        df_sub,
+                        x=x_col,
+                        y=y_col,
+                        color='attr_feature_sel',
+                        color_continuous_scale=COLORSCALE_ATRIBUICAO_2D,
+                        range_color=[-max_abs, max_abs],
+                        custom_data=[
+                            'instancia_id',
+                            'classe_real',
+                            'classe_predita',
+                            'erro_predicao',
+                            'attr_feature_sel',
+                            'val_orig_txt',
+                        ],
+                    )
+                    fig_tsne.update_coloraxes(
+                        colorbar=dict(
+                            title=f'Atribuição<br>({feat_aplicada})',
+                            len=0.8,
+                        )
+                    )
+                    fig_tsne.update_traces(
+                        marker=dict(
+                            size=8,
+                            opacity=0.9,
+                            line=dict(width=0.5, color='#334155'),
+                        ),
+                        hovertemplate=(
+                            '<b>Instância ID:</b> #%{customdata[0]}<br>'
+                            f'<b>Feature:</b> {feat_aplicada}<br>'
+                            '<b>Atribuição XAI:</b> %{customdata[4]:.4f}<br>'
+                            '<b>Valor da Feature:</b> %{customdata[5]}<br>'
+                            '<b>Classe Real:</b> %{customdata[1]} | '
+                            '<b>Predita:</b> %{customdata[2]}<extra></extra>'
+                        ),
+                    )
+
+            # Fallback padrão: usa o dropdown "Colorir 2D Por:"
+            if feat_aplicada is None:
+                if cor_proj_sel == 'erro_predicao':
+                    df_sub['cor_label'] = df_sub['erro_predicao'].map(
+                        {0: 'Acerto', 1: 'Erro'}
+                    )
+                    fig_tsne = px.scatter(
+                        df_sub,
+                        x=x_col,
+                        y=y_col,
+                        color='cor_label',
+                        color_discrete_map={'Acerto': '#059669', 'Erro': '#dc2626'},
+                        custom_data=[
+                            'instancia_id',
+                            'classe_real',
+                            'classe_predita',
+                            'erro_predicao',
+                        ],
+                    )
+                else:
+                    fig_tsne = px.scatter(
+                        df_sub,
+                        x=x_col,
+                        y=y_col,
+                        color=cor_proj_sel,
+                        color_continuous_scale=COLORSCALE_BLUES_20,
+                        custom_data=[
+                            'instancia_id',
+                            'classe_real',
+                            'classe_predita',
+                            'erro_predicao',
+                        ],
+                    )
+                    fig_tsne.update_coloraxes(
+                        colorbar=dict(tickvals=[0, 1], ticktext=['0', '1'], len=0.8)
+                    )
+
+                fig_tsne.update_traces(
+                    marker=dict(
+                        size=8, opacity=0.85, line=dict(width=0.5, color='#334155')
+                    ),
+                    hovertemplate=(
+                        '<b>Instância ID:</b> #%{customdata[0]}<br><b>Classe Real:</b>'
+                        ' %{customdata[1]}<br><b>Classe Predita:</b>'
+                        ' %{customdata[2]}<br><b>Erro:</b> %{customdata[3]}<br><b>X:</b>'
+                        ' %{x:.3f} | <b>Y:</b> %{y:.3f}<extra></extra>'
+                    ),
+                )
 
             if instancias_destaque_sankey and triggered_id != 'badge-limpar-sankey':
                 df_sankey_pts = df_sub[
@@ -2047,10 +2270,13 @@ def update_all_graphs(
                         )
                     )
 
+            subtitulo_cor = (
+                f' | Cor: {feat_aplicada}' if feat_aplicada else ''
+            )
             fig_tsne.update_layout(
                 title=(
                     f'Espaço 2D ({algo_label}) - Época {epoca_alvo}'
-                    f' ({"MÉDIA GERAL" if is_comb else metodo_sel}) - {label_ds}'
+                    f' ({"MÉDIA GERAL" if is_comb else metodo_sel}){subtitulo_cor}'
                 ),
                 xaxis=dict(showticklabels=False, title=''),
                 yaxis=dict(showticklabels=False, title=''),
@@ -2059,6 +2285,23 @@ def update_all_graphs(
                 dragmode='select',
                 clickmode='event+select',
             )
+
+    if feat_aplicada:
+        badge_feat_children = [
+            f'Feature: {feat_aplicada} ',
+            html.Span('✕', style={'fontWeight': 'bold', 'marginLeft': '4px'}),
+        ]
+        badge_feat_style = {
+            'cursor': 'pointer',
+            'fontSize': '11px',
+            'padding': '5px 9px',
+            'borderRadius': '12px',
+            'boxShadow': '0 2px 4px rgba(0,0,0,0.1)',
+            'display': 'inline-block',
+        }
+    else:
+        badge_feat_children = []
+        badge_feat_style = {'display': 'none'}
 
     # ----------------------------------------------------
     # 5. BEESWARM DE ATRIBUIÇÕES XAI (Valores Originais)
@@ -2072,6 +2315,7 @@ def update_all_graphs(
         'MÉDIA GERAL' if is_comb else str(metodo_sel).upper(),
         label_ds,
         col_valor_feature=col_valor_feature,
+        feature_ativa=feat_aplicada,
     )
 
     # ----------------------------------------------------
@@ -2329,6 +2573,8 @@ def update_all_graphs(
         fig_err_dist,
         badge_children,
         badge_style,
+        badge_feat_children,
+        badge_feat_style,
     )
 
 
@@ -2394,6 +2640,7 @@ def update_table_from_store(
         df_tabela = df_sub
 
     return df_tabela.to_dict('records')
+
 
 if __name__ == '__main__':
     app.run(debug=False)
