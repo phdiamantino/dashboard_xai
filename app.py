@@ -1221,28 +1221,7 @@ ABA_XAI = dbc.Tab(
                         )
                     )
                 ]),
-                # 2. Heatmap (segue o "Método XAI" principal) e Estabilidade
-                dbc.Row([
-                    coluna(
-                        card_grafico(
-                            'Resumo Global / Heatmap de Importância Temporal'
-                            ' (clique em uma linha para colorir o 2D)',
-                            'heatmap-graph',
-                            '500px',
-                            corpo_extra=CONTROLE_HEATMAP_ORDEM,
-                        ),
-                        lg=7,
-                    ),
-                    coluna(
-                        card_grafico(
-                            'Estabilidade das Explicações (XAI)',
-                            'stability-graph',
-                            '500px',
-                        ),
-                        lg=5,
-                    ),
-                ]),
-                # 3. Espaço 2D + Beeswarm
+                # 2. Espaço 2D + Beeswarm (trocados de lugar com Heatmap e Estabilidade)
                 dbc.Row([
                     coluna(
                         card_grafico(
@@ -1260,6 +1239,26 @@ ABA_XAI = dbc.Tab(
                             ' (clique na feature para colorir o 2D)',
                             'beeswarm-graph',
                             '520px',
+                        ),
+                        lg=5,
+                    ),
+                ]),
+                # 3. Heatmap + Estabilidade (trocados de lugar com Espaço 2D e Beeswarm)
+                dbc.Row([
+                    coluna(
+                        card_grafico(
+                            'Resumo Global / Heatmap de Importância Temporal',
+                            'heatmap-graph',
+                            '500px',
+                            corpo_extra=CONTROLE_HEATMAP_ORDEM,
+                        ),
+                        lg=7,
+                    ),
+                    coluna(
+                        card_grafico(
+                            'Estabilidade das Explicações (XAI)',
+                            'stability-graph',
+                            '500px',
                         ),
                         lg=5,
                     ),
@@ -1434,11 +1433,10 @@ def update_options(dataset_sel):
     )
 
 
-# CALLBACK PARA FEATURE SELECIONADA (CLIQUE NO HEATMAP OU BEESWARM)
+# CALLBACK PARA FEATURE SELECIONADA (APENAS VIA BEESWARM)
 @app.callback(
     Output('store-feature-selecionada', 'data'),
     [
-        Input('heatmap-graph', 'clickData'),
         Input('beeswarm-graph', 'clickData'),
         Input('badge-limpar-feature', 'n_clicks'),
         Input('dim-dropdown-cor', 'value'),
@@ -1448,7 +1446,6 @@ def update_options(dataset_sel):
     [State('store-feature-selecionada', 'data')],
 )
 def gerenciar_feature_selecionada(
-    clickDataHeatmap,
     clickDataBeeswarm,
     btn_limpar_feature,
     cor_proj_sel,
@@ -1468,19 +1465,6 @@ def gerenciar_feature_selecionada(
         'dropdown-metodo',
     ]:
         return None
-
-    # Clique no Heatmap -> pega o nome da feature no eixo Y
-    if (
-        triggered_id == 'heatmap-graph'
-        and clickDataHeatmap
-        and 'points' in clickDataHeatmap
-        and len(clickDataHeatmap['points']) > 0
-    ):
-        pt_h = clickDataHeatmap['points'][0]
-        feat_clicada = pt_h.get('y')
-        if feat_clicada is not None:
-            feat_str = str(feat_clicada)
-            return None if feature_atual == feat_str else feat_str
 
     # Clique no Beeswarm -> pega o nome da feature em customdata[1]
     if (
@@ -1937,7 +1921,7 @@ def update_all_graphs(
                     )
                 )
 
-                # Realce visual na linha da feature selecionada
+                # Realce visual na linha da feature selecionada no Beeswarm
                 if feature_selecionada and feature_selecionada in piv.index:
                     idx_h = list(piv.index).index(feature_selecionada)
                     fig_heat.add_shape(
@@ -2067,6 +2051,17 @@ def update_all_graphs(
 
         if not df_sub.empty:
             df_sub['instancia_id'] = df_sub['instancia_id'].astype(str)
+            df_sub['classe_real_nome'] = (
+                pd.to_numeric(df_sub['classe_real'], errors='coerce')
+                .map(map_cls)
+                .fillna(df_sub['classe_real'].astype(str))
+            )
+            df_sub['classe_predita_nome'] = (
+                pd.to_numeric(df_sub['classe_predita'], errors='coerce')
+                .map(map_cls)
+                .fillna(df_sub['classe_predita'].astype(str))
+            )
+
             df_exp_ep = pd.DataFrame()
             if not df_d3.empty:
                 df_exp_ep = df_d3[
@@ -2093,7 +2088,7 @@ def update_all_graphs(
             else:
                 x_col, y_col = 'tsne_dim_1', 'tsne_dim_2'
 
-            # Verifica se há feature selecionada (Heatmap ou Beeswarm) para pintar o 2D
+            # Verifica se há feature selecionada (via Beeswarm) para pintar o 2D
             if (
                 feature_selecionada
                 and not df_exp_ep.empty
@@ -2152,8 +2147,8 @@ def update_all_graphs(
                         range_color=[-max_abs, max_abs],
                         custom_data=[
                             'instancia_id',
-                            'classe_real',
-                            'classe_predita',
+                            'classe_real_nome',
+                            'classe_predita_nome',
                             'erro_predicao',
                             'attr_feature_sel',
                             'val_orig_txt',
@@ -2181,8 +2176,12 @@ def update_all_graphs(
                         ),
                     )
 
-            # Fallback padrão: usa o dropdown "Colorir 2D Por:"
+            # Fallback padrão: usa o dropdown "Colorir 2D Por:" com rótulos reais das classes
             if feat_aplicada is None:
+                lbl_c0 = map_cls.get(0, 'Classe 0')
+                lbl_c1 = map_cls.get(1, 'Classe 1')
+                mapa_cores_classes = {lbl_c0: '#2563eb', lbl_c1: '#f97316'}
+
                 if cor_proj_sel == 'erro_predicao':
                     df_sub['cor_label'] = df_sub['erro_predicao'].map(
                         {0: 'Acerto', 1: 'Erro'}
@@ -2193,10 +2192,28 @@ def update_all_graphs(
                         y=y_col,
                         color='cor_label',
                         color_discrete_map={'Acerto': '#059669', 'Erro': '#dc2626'},
+                        labels={'cor_label': 'Resultado da predição'},
+                        category_orders={'cor_label': ['Acerto', 'Erro']},
                         custom_data=[
                             'instancia_id',
-                            'classe_real',
-                            'classe_predita',
+                            'classe_real_nome',
+                            'classe_predita_nome',
+                            'erro_predicao',
+                        ],
+                    )
+                elif cor_proj_sel == 'classe_real':
+                    fig_tsne = px.scatter(
+                        df_sub,
+                        x=x_col,
+                        y=y_col,
+                        color='classe_real_nome',
+                        color_discrete_map=mapa_cores_classes,
+                        labels={'classe_real_nome': 'Classe real'},
+                        category_orders={'classe_real_nome': [lbl_c0, lbl_c1]},
+                        custom_data=[
+                            'instancia_id',
+                            'classe_real_nome',
+                            'classe_predita_nome',
                             'erro_predicao',
                         ],
                     )
@@ -2205,17 +2222,16 @@ def update_all_graphs(
                         df_sub,
                         x=x_col,
                         y=y_col,
-                        color=cor_proj_sel,
-                        color_continuous_scale=COLORSCALE_BLUES_20,
+                        color='classe_predita_nome',
+                        color_discrete_map=mapa_cores_classes,
+                        labels={'classe_predita_nome': 'Classe predita'},
+                        category_orders={'classe_predita_nome': [lbl_c0, lbl_c1]},
                         custom_data=[
                             'instancia_id',
-                            'classe_real',
-                            'classe_predita',
+                            'classe_real_nome',
+                            'classe_predita_nome',
                             'erro_predicao',
                         ],
-                    )
-                    fig_tsne.update_coloraxes(
-                        colorbar=dict(tickvals=[0, 1], ticktext=['0', '1'], len=0.8)
                     )
 
                 fig_tsne.update_traces(
