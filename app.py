@@ -590,19 +590,18 @@ def construir_beeswarm(
             line_color='rgba(37, 99, 235, 0.35)',
         )
 
-    # Marcadores clicáveis fora da área de plotagem (eixo X secundário em paper coords)
+    # Marcadores clicáveis por linha/feature (dentro da área do gráfico, como antes)
+    x_min_pad = float(x_all.min()) - 0.08 * max(float(np.ptp(x_all)), 1e-3)
     fig.add_trace(
         go.Scatter(
-            x=[-0.025] * len(top),
+            x=[x_min_pad] * len(top),
             y=list(range(len(top))),
-            xaxis='x2',
             mode='markers',
-            cliponaxis=False,
             marker=dict(
-                size=14,
+                size=16,
                 symbol='diamond',
                 color=[
-                    '#2563eb' if f == feature_ativa else 'rgba(148, 163, 184, 0.45)'
+                    '#2563eb' if f == feature_ativa else 'rgba(148, 163, 184, 0.35)'
                     for f in top
                 ],
                 line=dict(width=1, color='#475569'),
@@ -668,8 +667,7 @@ def construir_beeswarm(
             )
 
     tick_labels = [
-        f'<b>▶ {f}</b>&nbsp;&nbsp;&nbsp;' if f == feature_ativa else f'{f}&nbsp;&nbsp;&nbsp;'
-        for f in top
+        f'<b>▶ {f}</b>' if f == feature_ativa else f for f in top
     ]
 
     fig.add_vline(x=0, line_width=1, line_color='#94a3b8')
@@ -680,12 +678,6 @@ def construir_beeswarm(
                 f'Atribuição XAI ({rotulo_escala}) (← classe 0 | classe 1 →)'
             ),
             zeroline=False,
-            fixedrange=True,
-        ),
-        xaxis2=dict(
-            overlaying='x',
-            range=[0, 1],
-            visible=False,
             fixedrange=True,
         ),
         yaxis=dict(
