@@ -492,8 +492,9 @@ def construir_beeswarm(
                 text=msg, x=0.5, y=0.5, xref='paper', yref='paper',
                 showarrow=False,
             )],
-            xaxis=dict(visible=False),
-            yaxis=dict(visible=False),
+            xaxis=dict(visible=False, fixedrange=True),
+            yaxis=dict(visible=False, fixedrange=True),
+            dragmode=False,
             template='plotly_white',
         )
         return fig
@@ -678,6 +679,7 @@ def construir_beeswarm(
                 f'Atribuição XAI ({rotulo_escala}) (← classe 0 | classe 1 →)'
             ),
             zeroline=False,
+            fixedrange=True,
         ),
         yaxis=dict(
             tickmode='array',
@@ -685,7 +687,9 @@ def construir_beeswarm(
             ticktext=tick_labels,
             automargin=True,
             tickfont=dict(size=10),
+            fixedrange=True,
         ),
+        dragmode=False,
         margin=dict(l=20, r=20, t=40, b=40),
         template='plotly_white',
         clickmode='event',
@@ -947,6 +951,41 @@ def obter_sankey(dataset_sel):
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 server = app.server
 
+# CSS para exibir cursor de mãozinha (pointer) nos marcadores de feature e no select
+app.index_string = '''<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+        <style>
+            #beeswarm-graph .scatterlayer .trace:first-of-type path.point {
+                cursor: pointer !important;
+                pointer-events: all !important;
+            }
+            .Select-control,
+            .Select-value-label,
+            .Select-placeholder,
+            .Select-arrow-zone,
+            .Select-menu-outer .Select-option,
+            [class*="-control"],
+            [class*="-option"],
+            [class*="-dropdown-indicator"] {
+                cursor: pointer !important;
+            }
+        </style>
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>'''
+
 ESTILO_HEADER = {
     'backgroundColor': '#f8fafc',
     'fontWeight': 'bold',
@@ -964,7 +1003,7 @@ def campo_dropdown(label, dd_id, options, value=None, mb='12px'):
             options=options,
             value=value,
             clearable=False,
-            style={'fontSize': '11px', 'marginBottom': mb},
+            style={'fontSize': '11px', 'marginBottom': mb, 'cursor': 'pointer'},
         ),
     ])
 
@@ -1021,6 +1060,11 @@ CONFIG_SCATTER = {
     'doubleClick': 'reset',
 }
 
+CONFIG_BEESWARM = {
+    'displayModeBar': False,
+    'scrollZoom': False,
+}
+
 BADGE_LIMPAR = dbc.Badge(
     id='badge-limpar-sankey',
     color='danger',
@@ -1067,7 +1111,8 @@ CONTROLE_HEATMAP_ORDEM = html.Div(
             ],
             value='media',
             inline=True,
-            inputStyle={'marginLeft': '12px', 'marginRight': '4px'},
+            inputStyle={'marginLeft': '12px', 'marginRight': '4px', 'cursor': 'pointer'},
+            labelStyle={'cursor': 'pointer'},
             style={'fontSize': '11px', 'color': '#334155'},
         ),
     ],
@@ -1249,6 +1294,7 @@ ABA_XAI = dbc.Tab(
                             ' (clique na feature para colorir o 2D)',
                             'beeswarm-graph',
                             '520px',
+                            config=CONFIG_BEESWARM,
                         ),
                         lg=5,
                     ),
