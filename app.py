@@ -985,23 +985,33 @@ def card_grafico(
             className='d-flex justify-content-between align-items-center',
             style=ESTILO_HEADER,
         )
-    kwargs = {'id': graph_id, 'style': {'height': altura}}
+    kwargs = {
+        'id': graph_id,
+        'style': {'height': altura, 'minHeight': altura, 'flex': '1 1 auto'},
+    }
     if config:
         kwargs['config'] = config
     corpo = [dcc.Graph(**kwargs)]
     if corpo_extra is not None:
         corpo = [corpo_extra] + corpo
     return dbc.Card(
-        [header, dbc.CardBody(corpo)],
-        className='shadow-sm mb-4',
+        [
+            header,
+            dbc.CardBody(
+                corpo,
+                className='d-flex flex-column',
+                style={'height': '100%'},
+            ),
+        ],
+        className='shadow-sm mb-4 h-100',
         style=ESTILO_CARD,
     )
 
 
 def coluna(conteudo, lg=None):
     if lg:
-        return dbc.Col([conteudo], width=12, lg=lg)
-    return dbc.Col([conteudo], width=12)
+        return dbc.Col([conteudo], width=12, lg=lg, className='mb-4')
+    return dbc.Col([conteudo], width=12, className='mb-4')
 
 
 CONFIG_SCATTER = {
@@ -1221,7 +1231,7 @@ ABA_XAI = dbc.Tab(
                         )
                     )
                 ]),
-                # 2. Espaço 2D + Beeswarm (trocados de lugar com Heatmap e Estabilidade)
+                # 2. Espaço 2D + Beeswarm
                 dbc.Row([
                     coluna(
                         card_grafico(
@@ -1243,7 +1253,7 @@ ABA_XAI = dbc.Tab(
                         lg=5,
                     ),
                 ]),
-                # 3. Heatmap + Estabilidade (trocados de lugar com Espaço 2D e Beeswarm)
+                # 3. Heatmap + Estabilidade (mesma altura visual)
                 dbc.Row([
                     coluna(
                         card_grafico(
@@ -1258,7 +1268,7 @@ ABA_XAI = dbc.Tab(
                         card_grafico(
                             'Estabilidade das Explicações (XAI)',
                             'stability-graph',
-                            '500px',
+                            '538px',
                         ),
                         lg=5,
                     ),
@@ -1830,6 +1840,7 @@ def update_all_graphs(
         )
 
     fig_stab.update_layout(
+        height=538,
         title=(
             'Consistência Temporal'
             f' ({metrica_est_sel.upper()}) - Destaque:'
@@ -1921,25 +1932,13 @@ def update_all_graphs(
                     )
                 )
 
-                # Realce visual na linha da feature selecionada no Beeswarm
-                if feature_selecionada and feature_selecionada in piv.index:
-                    idx_h = list(piv.index).index(feature_selecionada)
-                    fig_heat.add_shape(
-                        type='rect',
-                        x0=min(cols_list) - 0.5,
-                        x1=max(cols_list) + 0.5,
-                        y0=idx_h - 0.5,
-                        y1=idx_h + 0.5,
-                        line=dict(color='#2563eb', width=2.5),
-                        fillcolor='rgba(37, 99, 235, 0.08)',
-                    )
-
                 tick_labels_heat = [
                     f'<b>▶ {f}</b>' if f == feature_selecionada else f
                     for f in piv.index
                 ]
 
                 fig_heat.update_layout(
+                    height=500,
                     title=f'Heatmap de Importância Normalizada ({heat_label}) - {ordem_label}',
                     xaxis=dict(title='Época'),
                     yaxis=dict(
@@ -1954,6 +1953,7 @@ def update_all_graphs(
                 )
     if not fig_heat.data:
         fig_heat.update_layout(
+            height=500,
             title=f'Heatmap de Importância ({heat_label})',
             annotations=[dict(
                 text='Não há dados suficientes para o método selecionado.',
