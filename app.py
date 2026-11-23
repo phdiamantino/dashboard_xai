@@ -958,7 +958,7 @@ def obter_sankey(dataset_sel):
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 server = app.server
 
-# CSS inline para exibir mãozinha (pointer) nos marcadores clicáveis de features fora da área de plotagem do Beeswarm
+# CSS inline para exibir mãozinha (pointer) nos marcadores clicáveis de features no Beeswarm
 app.index_string = '''<!DOCTYPE html>
 <html>
     <head>
