@@ -590,7 +590,7 @@ def construir_beeswarm(
             line_color='rgba(37, 99, 235, 0.35)',
         )
 
-    # Marcadores clicáveis por linha/feature (dentro da área do gráfico, como antes)
+    # Marcadores clicáveis por linha/feature (permite clicar na linha da feature para pintar o 2D)
     x_min_pad = float(x_all.min()) - 0.08 * max(float(np.ptp(x_all)), 1e-3)
     fig.add_trace(
         go.Scatter(
