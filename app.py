@@ -480,10 +480,14 @@ def construir_beeswarm(
     label_ds,
     col_valor_feature=None,
     feature_ativa=None,
+    map_cls=None,
 ):
     """Beeswarm das atribuições XAI por feature para um método e uma época."""
     fig = go.Figure()
     titulo = f'Beeswarm de Atribuições XAI - {label_metodo} - Época {epoca_alvo}'
+    map_cls = map_cls or {0: 'Classe 0', 1: 'Classe 1'}
+    lbl_c0 = map_cls.get(0, 'Classe 0')
+    lbl_c1 = map_cls.get(1, 'Classe 1')
 
     def _vazio(msg):
         fig.update_layout(
@@ -675,7 +679,7 @@ def construir_beeswarm(
         title=titulo,
         xaxis=dict(
             title=(
-                f'Atribuição XAI ({rotulo_escala}) (← classe 0 | classe 1 →)'
+                f'Atribuição XAI ({rotulo_escala}) (← {lbl_c0} | {lbl_c1} →)'
             ),
             zeroline=False,
         ),
@@ -2332,6 +2336,7 @@ def update_all_graphs(
         label_ds,
         col_valor_feature=col_valor_feature,
         feature_ativa=feat_aplicada,
+        map_cls=map_cls,
     )
 
     # ----------------------------------------------------
