@@ -679,7 +679,7 @@ def construir_beeswarm(
         title=titulo,
         xaxis=dict(
             title=(
-                f'Atribuição XAI ({rotulo_escala}) (← {lbl_c0} | {lbl_c1} →)'
+                f'Atribuição XAI - {rotulo_escala} (← {lbl_c0} | {lbl_c1} →)'
             ),
             zeroline=False,
         ),
