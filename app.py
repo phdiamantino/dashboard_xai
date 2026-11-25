@@ -1014,11 +1014,12 @@ def card_grafico(
 
 def coluna(conteudo, lg=None, ajuste_px=0):
     style = {}
-    if ajuste_px != 0:
+    if lg and ajuste_px != 0:
+        pct = f'{(lg / 12) * 100:.6f}%'
         sinal = '+' if ajuste_px > 0 else '-'
         style = {
-            'flex': f'0 0 calc(50% {sinal} {abs(ajuste_px)}px)',
-            'maxWidth': f'calc(50% {sinal} {abs(ajuste_px)}px)',
+            'flex': f'0 0 calc({pct} {sinal} {abs(ajuste_px)}px)',
+            'maxWidth': f'calc({pct} {sinal} {abs(ajuste_px)}px)',
         }
     if lg:
         return dbc.Col([conteudo], width=12, lg=lg, className='mb-4', style=style)
@@ -1242,7 +1243,7 @@ ABA_XAI = dbc.Tab(
                         )
                     )
                 ]),
-                # 2. Espaço 2D (-60px) + Beeswarm (+60px)
+                # 2. Espaço 2D (-20px) + Beeswarm (+20px)
                 dbc.Row([
                     coluna(
                         card_grafico(
@@ -1252,8 +1253,8 @@ ABA_XAI = dbc.Tab(
                             config=CONFIG_SCATTER,
                             header_extra=[BADGE_LIMPAR_FEATURE, BADGE_LIMPAR],
                         ),
-                        lg=6,
-                        ajuste_px=-60,
+                        lg=7,
+                        ajuste_px=-20,
                     ),
                     coluna(
                         card_grafico(
@@ -1262,11 +1263,11 @@ ABA_XAI = dbc.Tab(
                             'beeswarm-graph',
                             '520px',
                         ),
-                        lg=6,
-                        ajuste_px=60,
+                        lg=5,
+                        ajuste_px=20,
                     ),
                 ]),
-                # 3. Heatmap (-60px) + Estabilidade (+60px)
+                # 3. Heatmap (-20px) + Estabilidade (+20px)
                 dbc.Row([
                     coluna(
                         card_grafico(
@@ -1275,8 +1276,8 @@ ABA_XAI = dbc.Tab(
                             '500px',
                             corpo_extra=CONTROLE_HEATMAP_ORDEM,
                         ),
-                        lg=6,
-                        ajuste_px=-60,
+                        lg=7,
+                        ajuste_px=-20,
                     ),
                     coluna(
                         card_grafico(
@@ -1284,8 +1285,8 @@ ABA_XAI = dbc.Tab(
                             'stability-graph',
                             '538px',
                         ),
-                        lg=6,
-                        ajuste_px=60,
+                        lg=5,
+                        ajuste_px=20,
                     ),
                 ]),
                 # 4. Tabela Auxiliar de Instâncias
