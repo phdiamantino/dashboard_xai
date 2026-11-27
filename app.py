@@ -40,19 +40,16 @@ PALETA_METODOS = [
 ]
 COR_COMBINADO = '#111827'
 
-# Paleta para Features Dominantes no Sankey (cores da legenda de referência)
-PALETA_FEATURES_SANKEY = [
-    '#2563eb',  # Azul
-    '#d97706',  # Laranja / Âmbar
-    '#0d9488',  # Verde-água / Teal
-    '#9333ea',  # Roxo
-    '#e11d48',  # Carmesim
-    '#64748b',  # Cinza ardósia
-    '#0284c7',  # Azul ciano
-    '#16a34a',  # Verde
-    '#ca8a04',  # Mostarda
-    '#db2777',  # Magenta
+# Paleta para as Top 5 Features Dominantes + 6ª ("Outras features" em cinza)
+PALETA_TOP5_FEATURES = [
+    '#2563eb',  # 1. Azul
+    '#d97706',  # 2. Laranja / Âmbar
+    '#0d9488',  # 3. Verde-água / Teal
+    '#9333ea',  # 4. Roxo
+    '#e11d48',  # 5. Carmesim
 ]
+LABEL_OUTRAS_FEATURES = 'Outras features'
+COR_OUTRAS_FEATURES = '#64748b'  # 6. Cinza ardósia
 
 COL_VALOR_FEATURE = 'valor_feature'
 
@@ -698,8 +695,8 @@ def construir_beeswarm(
 
 def processar_dados_sankey(df_d6, df_d3, df_d2, normalizar=True):
     """Constrói transições do Sankey a partir de df_d6 (todas as instâncias e
-    predições) enriquecidas com df_d3 (importância total + feature dominante)
-    e estatísticas por nó (Época, Classe Predita -> Top-1 Feature)."""
+    predições) enriquecidas com df_d3 (importância total, feature dominante e
+    importância da feature dominante por instância)."""
     req_d6 = {'epoca', 'instancia_id', 'classe_real', 'classe_predita'}
     if df_d6 is None or df_d6.empty or not req_d6.issubset(df_d6.columns):
         return pd.DataFrame(), [], pd.DataFrame(), {}
@@ -976,6 +973,9 @@ def processar_dados_sankey(df_d6, df_d3, df_d2, normalizar=True):
 
                 val_o = float(row_o['importancia_total'])
                 val_d = float(row_d['importancia_total'])
+                peso_dom_o = float(row_o['peso_feature_dom'])
+                peso_dom_d = float(row_d['peso_feature_dom'])
+
                 c_orig = int(row_o['classe_predita'])
                 c_dest = int(row_d['classe_predita'])
                 c_real = int(row_d['classe_real'])
@@ -1013,6 +1013,11 @@ def processar_dados_sankey(df_d6, df_d3, df_d2, normalizar=True):
                     'classe_real': c_real,
                     'feature_dominante_origem': feat_dom_o,
                     'feature_dominante_destino': feat_dom_d,
+                    'peso_feature_dom_origem': peso_dom_o,
+                    'peso_feature_dom_destino': peso_dom_d,
+                    'importancia_feat_dom_media': float(
+                        (peso_dom_o + peso_dom_d) / 2.0
+                    ),
                     'lider_mudou': lider_mudou,
                     'confianca_media': float((float(conf_o) + float(conf_d)) / 2.0),
                     'taxa_erro': float(taxa_erro_inst),
@@ -1057,34 +1062,83 @@ def obter_sankey(dataset_sel):
 
 
 def agregar_sankey_feature_dominante(df_trans_filtrado):
-    """Agrupa as transições de instâncias pela feature dominante na época de origem."""
+    """Agrupa as transições mantendo apenas as Top 5 features dominantes + a 6ª
+    categoria ('Outras features') como somatório das restantes, preservando os
+    4 fluxos de escolha (classe_origem -> classe_destino) e a transição da
+    feature dominante (origem -> destino) com a quantidade de instâncias como
+    largura e a importância média da feature por instância."""
     if df_trans_filtrado is None or df_trans_filtrado.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), [], {}
+
+    df_work = df_trans_filtrado.copy()
+
+    # Identifica Top 5 features dominantes mais frequentes no recorte ativo
+    contagem_orig = df_work['feature_dominante_origem'].value_counts()
+    candidatas = [f for f in contagem_orig.index if str(f) != 'N/D']
+    top5_features = list(candidatas[:5])
+    top5_set = set(top5_features)
+
+    df_work['feat_cat_origem'] = df_work['feature_dominante_origem'].apply(
+        lambda f: f if f in top5_set else LABEL_OUTRAS_FEATURES
+    )
+    df_work['feat_cat_destino'] = df_work['feature_dominante_destino'].apply(
+        lambda f: f if f in top5_set else LABEL_OUTRAS_FEATURES
+    )
+    df_work['cat_mudou'] = (
+        df_work['feat_cat_origem'] != df_work['feat_cat_destino']
+    ).astype(int)
+
+    categorias_ordenadas = list(top5_features)
+    if (
+        (df_work['feat_cat_origem'] == LABEL_OUTRAS_FEATURES).any()
+        or (df_work['feat_cat_destino'] == LABEL_OUTRAS_FEATURES).any()
+    ):
+        categorias_ordenadas.append(LABEL_OUTRAS_FEATURES)
+
+    mapa_cores = {}
+    for idx, feat in enumerate(top5_features):
+        mapa_cores[feat] = PALETA_TOP5_FEATURES[idx % len(PALETA_TOP5_FEATURES)]
+    mapa_cores[LABEL_OUTRAS_FEATURES] = COR_OUTRAS_FEATURES
 
     df_ag = (
-        df_trans_filtrado.groupby([
+        df_work.groupby([
             'metodo_xai',
             'epoca_origem',
             'epoca_destino',
             'classe_origem',
             'classe_destino',
-            'feature_dominante_origem',
+            'feat_cat_origem',
+            'feat_cat_destino',
         ])
         .agg(
             qtd_instancias=('instancia_id', 'count'),
-            qtd_lider_mudou=('lider_mudou', 'sum'),
+            qtd_lider_mudou=('cat_mudou', 'sum'),
             confianca_media=('confianca_media', 'mean'),
             taxa_erro=('taxa_erro', 'mean'),
             importancia_media=('importancia_media', 'mean'),
+            importancia_feat_dom_media=('importancia_feat_dom_media', 'mean'),
+            peso_feat_origem_media=('peso_feature_dom_origem', 'mean'),
+            peso_feat_destino_media=('peso_feature_dom_destino', 'mean'),
             exemplo_instancia=('instancia_id', 'first'),
             lista_instancias=('instancia_id', lambda x: [str(i) for i in list(x)]),
         )
         .reset_index()
+        .rename(
+            columns={
+                'feat_cat_origem': 'feature_dominante_origem',
+                'feat_cat_destino': 'feature_dominante_destino',
+            }
+        )
     )
-    return df_ag
+    return df_ag, categorias_ordenadas, mapa_cores
 
 
-def construir_legenda_sankey(cor_sankey_sel, df_fluxos_exibidos=None):
+def construir_legenda_sankey(
+    cor_sankey_sel,
+    df_fluxos_exibidos=None,
+    categorias_ordenadas=None,
+    mapa_cores=None,
+):
     """Constrói a barra de legenda dinâmica abaixo do gráfico Sankey."""
     estilo_container = {
         'display': 'flex',
@@ -1131,32 +1185,24 @@ def construir_legenda_sankey(cor_sankey_sel, df_fluxos_exibidos=None):
         totais_feat = (
             df_fluxos_exibidos.groupby('feature_dominante_origem')['qtd_instancias']
             .sum()
-            .sort_values(ascending=False)
         )
         total_geral = max(1, int(totais_feat.sum()))
 
-        mapa_cores = {}
-        itens = []
-        for idx, (feat_nome, qtd) in enumerate(totais_feat.items()):
-            cor_hex = PALETA_FEATURES_SANKEY[idx % len(PALETA_FEATURES_SANKEY)]
-            mapa_cores[feat_nome] = cor_hex
-            if idx < 8:
-                pct = (qtd / total_geral) * 100.0
-                itens.append(
-                    html.Span(
-                        [
-                            _swatch(cor_hex),
-                            html.Span(f'{feat_nome} ({pct:.1f}%)'),
-                        ],
-                        style=estilo_item,
-                    )
-                )
+        mapa_cores = mapa_cores or {}
+        cats = categorias_ordenadas or list(totais_feat.index)
 
-        if len(totais_feat) > 8:
+        itens = []
+        for feat_nome in cats:
+            qtd = int(totais_feat.get(feat_nome, 0))
+            pct = (qtd / total_geral) * 100.0
+            cor_hex = mapa_cores.get(feat_nome, COR_OUTRAS_FEATURES)
             itens.append(
                 html.Span(
-                    f'+{len(totais_feat) - 8} outras features',
-                    style={'color': '#64748b', 'fontStyle': 'italic'},
+                    [
+                        _swatch(cor_hex),
+                        html.Span(f'{feat_nome} ({pct:.1f}%)'),
+                    ],
+                    style=estilo_item,
                 )
             )
 
@@ -1484,7 +1530,7 @@ SIDEBAR = dbc.Col(
                             'value': 'assertividade',
                         },
                         {
-                            'label': 'Feature Dominante (por Instância)',
+                            'label': 'Feature Dominante (Top 5 + Outras)',
                             'value': 'feature_dominante',
                         },
                         {'label': 'Classe Predita', 'value': 'classe'},
@@ -1898,13 +1944,13 @@ def gerenciar_feature_selecionada(
 def _obter_fluxos_sankey_filtrados(
     dataset_sel, metodo_sel, epocas_sel, cor_sankey_sel
 ):
-    """Retorna o DataFrame de fluxos exatamente na mesma ordem renderizada no Sankey."""
+    """Retorna (df_fluxos, metodo_alvo, categorias_top5_outras, mapa_cores)."""
     df_sankey_proc, _, df_trans_proc, _ = obter_sankey(dataset_sel)
     m_alvo_norm = str(metodo_sel or METODO_COMBINADO).upper().strip()
 
     if cor_sankey_sel == 'feature_dominante':
         if df_trans_proc.empty:
-            return pd.DataFrame(), m_alvo_norm
+            return pd.DataFrame(), m_alvo_norm, [], {}
         metodos_t = (
             df_trans_proc['metodo_xai'].astype(str).str.upper().str.strip()
         )
@@ -1919,10 +1965,11 @@ def _obter_fluxos_sankey_filtrados(
                 (df_t_fil['epoca_origem'] >= epocas_sel[0])
                 & (df_t_fil['epoca_destino'] <= epocas_sel[1])
             ]
-        return agregar_sankey_feature_dominante(df_t_fil), m_alvo
+        df_ag, cats, mapa_cores = agregar_sankey_feature_dominante(df_t_fil)
+        return df_ag, m_alvo, cats, mapa_cores
 
     if df_sankey_proc.empty:
-        return pd.DataFrame(), m_alvo_norm
+        return pd.DataFrame(), m_alvo_norm, [], {}
 
     metodos_s = (
         df_sankey_proc['metodo_xai'].astype(str).str.upper().str.strip()
@@ -1938,7 +1985,7 @@ def _obter_fluxos_sankey_filtrados(
             (df_s_fil['epoca_origem'] >= epocas_sel[0])
             & (df_s_fil['epoca_destino'] <= epocas_sel[1])
         ]
-    return df_s_fil, m_alvo
+    return df_s_fil, m_alvo, [], {}
 
 
 # CALLBACK CENTRAL DE ESTADO DE INSTÂNCIAS
@@ -2031,7 +2078,7 @@ def gerenciar_estado_selecao(
     ):
         pt_s = clickDataSankey['points'][0]
         if 'pointNumber' in pt_s:
-            df_fil, _ = _obter_fluxos_sankey_filtrados(
+            df_fil, _, _, _ = _obter_fluxos_sankey_filtrados(
                 dataset_sel, metodo_sel, epocas_sel, cor_sankey_sel
             )
             if not df_fil.empty and pt_s['pointNumber'] < len(df_fil):
@@ -2407,8 +2454,10 @@ def update_all_graphs(
     instancias_destaque_sankey = []
 
     _, _, _, node_stats_sankey = obter_sankey(dataset_sel)
-    df_filtered_s, m_alvo = _obter_fluxos_sankey_filtrados(
-        dataset_sel, metodo_sel, epocas_sel, cor_sankey_sel
+    df_filtered_s, m_alvo, cats_feat_dom, mapa_cores_features = (
+        _obter_fluxos_sankey_filtrados(
+            dataset_sel, metodo_sel, epocas_sel, cor_sankey_sel
+        )
     )
 
     if (
@@ -2757,11 +2806,14 @@ def update_all_graphs(
     )
 
     # ----------------------------------------------------
-    # 6. SANKEY TEMPORAL (RÓTULO DINÂMICO TOP-1 + ASSERTIVIDADE / FEATURE DOMINANTE)
+    # 6. SANKEY TEMPORAL (TOP 5 FEATURES + OUTRAS / ASSERTIVIDADE)
     # ----------------------------------------------------
     fig_sankey = go.Figure()
-    legenda_sankey_ui, mapa_cores_features = construir_legenda_sankey(
-        cor_sankey_sel, df_filtered_s
+    legenda_sankey_ui, _ = construir_legenda_sankey(
+        cor_sankey_sel,
+        df_filtered_s,
+        categorias_ordenadas=cats_feat_dom,
+        mapa_cores=mapa_cores_features,
     )
 
     if not df_filtered_s.empty:
@@ -2782,97 +2834,201 @@ def update_all_graphs(
             [],
         )
         node_dict = {}
-
-        for i_ep, ep in enumerate(epocas_unicas):
-            for cl in classes_unicas:
-                node_id = len(node_labels)
-                node_dict[f'E{ep}_C{cl}'] = node_id
-                nome_classe = map_cls.get(cl, f'Classe {cl}')
-
-                st = node_stats_sankey.get((m_alvo, int(ep), int(cl)), {})
-                top_feat = st.get('top_feature', 'N/D')
-                top_prop = float(st.get('top_prop', 0.0))
-                total_no = int(st.get('total_instancias', 0))
-                mudou_criterio = bool(st.get('mudou_criterio', False))
-
-                if top_feat != 'N/D' and total_no > 0:
-                    marcador_mudanca = ' ◆' if mudou_criterio else ''
-                    label_no = (
-                        f'Época {ep} — {nome_classe}<br>'
-                        f'★ {top_feat} ({top_prop:.2f}){marcador_mudanca}'
-                    )
-                    cor_no = (
-                        mapa_cores_features.get(top_feat, '#334155')
-                        if cor_sankey_sel == 'feature_dominante'
-                        else '#e2e8f0'
-                    )
-                else:
-                    label_no = f'Época {ep} — {nome_classe}'
-                    cor_no = '#e2e8f0'
-
-                node_labels.append(label_no)
-                node_colors.append(cor_no)
-                node_customdata.append(
-                    f'<b>Época {ep} — {nome_classe}</b><br>'
-                    f'<b>Instâncias previstas na classe:</b> {total_no}<br>'
-                    f'<b>Feature Líder (Top-1):</b> ★ {top_feat}'
-                    f' ({top_prop*100:.1f}% das instâncias do nó)'
-                    + (
-                        '<br><b>◆ Critério de decisão mudou</b> em relação à'
-                        ' época anterior'
-                        if mudou_criterio
-                        else ''
-                    )
-                )
-
-                x_pos = 0.05 + 0.9 * (i_ep / max(1, len(epocas_unicas) - 1))
-                y_pos = 0.2 if cl == 0 else 0.8
-                node_x.append(x_pos)
-                node_y.append(y_pos)
-
         sources, targets, values, link_colors, hover_texts = [], [], [], [], []
-        for _, row in df_filtered_s.iterrows():
-            src_key = f"E{row['epoca_origem']}_C{row['classe_origem']}"
-            tgt_key = f"E{row['epoca_destino']}_C{row['classe_destino']}"
 
-            if src_key not in node_dict or tgt_key not in node_dict:
-                continue
+        if cor_sankey_sel == 'feature_dominante':
+            # Calcula o volume de instâncias em cada sub-nó (Época, Classe, Feature_Cat)
+            volume_subno = {}
+            for _, row in df_filtered_s.iterrows():
+                k_o = (
+                    int(row['epoca_origem']),
+                    int(row['classe_origem']),
+                    str(row['feature_dominante_origem']),
+                )
+                k_d = (
+                    int(row['epoca_destino']),
+                    int(row['classe_destino']),
+                    str(row['feature_dominante_destino']),
+                )
+                qtd = int(row['qtd_instancias'])
+                volume_subno[k_o] = max(volume_subno.get(k_o, 0), qtd)
+                volume_subno[k_d] = max(volume_subno.get(k_d, 0), qtd)
 
-            sources.append(node_dict[src_key])
-            targets.append(node_dict[tgt_key])
-            val_fluxo = int(row['qtd_instancias'])
-            values.append(val_fluxo)
+            # Cria sub-nós empilhados por categoria (Top 5 + Outras features) em cada (Época, Classe)
+            # Ordem visual: Classe 1 no bloco superior (y ~ 0.05..0.44), Classe 0 no bloco inferior (y ~ 0.54..0.95)
+            for i_ep, ep in enumerate(epocas_unicas):
+                x_pos = 0.03 + 0.94 * (i_ep / max(1, len(epocas_unicas) - 1))
 
-            conf = float(row['confianca_media'])
-            c_orig = int(row['classe_origem'])
-            c_dest = int(row['classe_destino'])
+                for cl in [1, 0]:
+                    nome_classe = map_cls.get(cl, f'Classe {cl}')
+                    st = node_stats_sankey.get((m_alvo, int(ep), int(cl)), {})
+                    top_feat = st.get('top_feature', 'N/D')
+                    top_prop = float(st.get('top_prop', 0.0))
+                    total_no = int(st.get('total_instancias', 0))
+                    mudou_criterio = bool(st.get('mudou_criterio', False))
+                    marcador_mudanca = ' ◆' if mudou_criterio else ''
 
-            if cor_sankey_sel == 'feature_dominante':
-                feat_dom = str(row['feature_dominante_origem'])
-                cor_hex = mapa_cores_features.get(feat_dom, '#64748b')
+                    sub_ativos = [
+                        cat
+                        for cat in cats_feat_dom
+                        if volume_subno.get((int(ep), int(cl), cat), 0) > 0
+                    ]
+                    if not sub_ativos:
+                        sub_ativos = list(cats_feat_dom)
+
+                    # Posicionamento vertical dos sub-blocos dentro da faixa da classe
+                    y_ini, y_fim = (0.04, 0.43) if cl == 1 else (0.55, 0.95)
+                    n_sub = max(1, len(sub_ativos))
+
+                    # Identifica o sub-nó com maior volume para ancorar o título do grupo (ex: ★ worst radius ◆ / Benigno · 21%)
+                    idx_label = int(
+                        np.argmax([
+                            volume_subno.get((int(ep), int(cl), c), 0)
+                            for c in sub_ativos
+                        ])
+                    )
+
+                    for idx_c, feat_cat in enumerate(sub_ativos):
+                        node_id = len(node_labels)
+                        node_dict[f'E{ep}_C{cl}_F{feat_cat}'] = node_id
+
+                        if idx_c == idx_label and top_feat != 'N/D' and total_no > 0:
+                            label_no = (
+                                f'★ {top_feat}{marcador_mudanca}<br>'
+                                f'{nome_classe} · {top_prop*100:.0f}%'
+                            )
+                        else:
+                            label_no = ''
+
+                        cor_hex = mapa_cores_features.get(
+                            feat_cat, COR_OUTRAS_FEATURES
+                        )
+                        node_labels.append(label_no)
+                        node_colors.append(cor_hex)
+                        node_customdata.append(
+                            f'<b>Época {ep} — {nome_classe}</b><br>'
+                            f'<b>Segmento Feature:</b> {feat_cat}<br>'
+                            f'<b>Feature Líder do Grupo:</b> ★ {top_feat}'
+                            f' ({top_prop*100:.1f}%)'
+                            + (
+                                '<br><b>◆ Critério líder mudou</b> em relação à'
+                                ' época anterior'
+                                if mudou_criterio
+                                else ''
+                            )
+                        )
+
+                        frac = (idx_c + 0.5) / n_sub
+                        node_x.append(x_pos)
+                        node_y.append(y_ini + frac * (y_fim - y_ini))
+
+            for _, row in df_filtered_s.iterrows():
+                feat_o = str(row['feature_dominante_origem'])
+                feat_d = str(row['feature_dominante_destino'])
+                src_key = f"E{row['epoca_origem']}_C{row['classe_origem']}_F{feat_o}"
+                tgt_key = f"E{row['epoca_destino']}_C{row['classe_destino']}_F{feat_d}"
+
+                if src_key not in node_dict or tgt_key not in node_dict:
+                    continue
+
+                sources.append(node_dict[src_key])
+                targets.append(node_dict[tgt_key])
+                val_fluxo = int(row['qtd_instancias'])
+                values.append(val_fluxo)
+
+                c_orig = int(row['classe_origem'])
+                c_dest = int(row['classe_destino'])
+                cor_hex = mapa_cores_features.get(feat_o, COR_OUTRAS_FEATURES)
                 rgb_str = hex_to_rgb_str(cor_hex)
-                qtd_mudou = int(row.get('qtd_lider_mudou', 0))
-                pct_mudou_fluxo = (qtd_mudou / max(1, val_fluxo)) * 100.0
-                alpha = 0.72
+
+                manteve_feat = feat_o == feat_d
+                alpha = 0.68 if manteve_feat else 0.55
                 link_colors.append(f'rgba({rgb_str}, {alpha:.2f})')
+
+                status_feat = (
+                    f'Manteve ({feat_o})'
+                    if manteve_feat
+                    else f'Mudou ({feat_o} → {feat_d})'
+                )
+                imp_feat_inst = float(row.get('importancia_feat_dom_media', 0.0))
 
                 hover_text = (
                     f'<b>Dataset:</b> {dataset_sel.upper()}<br>'
                     f'<b>Método XAI:</b> {m_alvo}<br>'
                     f'<b>Transição:</b> Época {row["epoca_origem"]}'
                     f' &rarr; Época {row["epoca_destino"]}<br>'
-                    f'<b>Classe Predita:</b> {map_cls.get(c_orig)} &rarr;'
+                    f'<b>Fluxo de Classe:</b> {map_cls.get(c_orig)} &rarr;'
                     f' {map_cls.get(c_dest)}<br>'
-                    f'<b>Feature Dominante (Origem):</b> {feat_dom}<br>'
-                    f'<b>Qtd Instâncias:</b> {val_fluxo}<br>'
-                    f'<b>◆ Feature líder mudou:</b> {qtd_mudou} de {val_fluxo}'
-                    f' ({pct_mudou_fluxo:.1f}%)<br>'
-                    f'<b>Exemplo ID:</b> #{row["exemplo_instancia"]}<br>'
-                    f'<b>Importância Média XAI:</b>'
-                    f' {row["importancia_media"]:.4f}'
+                    f'<b>Escolha de Feature:</b> {status_feat}<br>'
+                    f'<b>Qtd Instâncias (Largura):</b> {val_fluxo}<br>'
+                    f'<b>Importância Feature Dominante / Instância:</b>'
+                    f' {imp_feat_inst:.4f}<br>'
+                    f'<b>Importância Total Média / Instância:</b>'
+                    f' {row["importancia_media"]:.4f}<br>'
+                    f'<b>Exemplo ID:</b> #{row["exemplo_instancia"]}'
                 )
                 hover_texts.append(hover_text)
-            else:
+
+            pad_no = 3
+            espessura_no = 18
+        else:
+            for i_ep, ep in enumerate(epocas_unicas):
+                for cl in classes_unicas:
+                    node_id = len(node_labels)
+                    node_dict[f'E{ep}_C{cl}'] = node_id
+                    nome_classe = map_cls.get(cl, f'Classe {cl}')
+
+                    st = node_stats_sankey.get((m_alvo, int(ep), int(cl)), {})
+                    top_feat = st.get('top_feature', 'N/D')
+                    top_prop = float(st.get('top_prop', 0.0))
+                    total_no = int(st.get('total_instancias', 0))
+                    mudou_criterio = bool(st.get('mudou_criterio', False))
+
+                    if top_feat != 'N/D' and total_no > 0:
+                        marcador_mudanca = ' ◆' if mudou_criterio else ''
+                        label_no = (
+                            f'Época {ep} — {nome_classe}<br>'
+                            f'★ {top_feat} ({top_prop:.2f}){marcador_mudanca}'
+                        )
+                    else:
+                        label_no = f'Época {ep} — {nome_classe}'
+
+                    node_labels.append(label_no)
+                    node_colors.append('#e2e8f0')
+                    node_customdata.append(
+                        f'<b>Época {ep} — {nome_classe}</b><br>'
+                        f'<b>Instâncias previstas na classe:</b> {total_no}<br>'
+                        f'<b>Feature Líder (Top-1):</b> ★ {top_feat}'
+                        f' ({top_prop*100:.1f}% das instâncias do nó)'
+                        + (
+                            '<br><b>◆ Critério de decisão mudou</b> em relação à'
+                            ' época anterior'
+                            if mudou_criterio
+                            else ''
+                        )
+                    )
+
+                    x_pos = 0.05 + 0.9 * (i_ep / max(1, len(epocas_unicas) - 1))
+                    y_pos = 0.2 if cl == 0 else 0.8
+                    node_x.append(x_pos)
+                    node_y.append(y_pos)
+
+            for _, row in df_filtered_s.iterrows():
+                src_key = f"E{row['epoca_origem']}_C{row['classe_origem']}"
+                tgt_key = f"E{row['epoca_destino']}_C{row['classe_destino']}"
+
+                if src_key not in node_dict or tgt_key not in node_dict:
+                    continue
+
+                sources.append(node_dict[src_key])
+                targets.append(node_dict[tgt_key])
+                val_fluxo = int(row['qtd_instancias'])
+                values.append(val_fluxo)
+
+                conf = float(row['confianca_media'])
+                c_orig = int(row['classe_origem'])
+                c_dest = int(row['classe_destino'])
+
                 alpha = max(0.35, min(0.85, conf))
                 c_real = int(row['classe_real'])
                 acertou_orig = c_orig == c_real
@@ -2922,8 +3078,11 @@ def update_all_graphs(
                 )
                 hover_texts.append(hover_text)
 
+            pad_no = 34
+            espessura_no = 20
+
         modo_titulo = (
-            'Feature Dominante'
+            'Feature Dominante (Top 5 + Outras)'
             if cor_sankey_sel == 'feature_dominante'
             else 'Assertividade'
             if cor_sankey_sel == 'assertividade'
@@ -2935,9 +3094,9 @@ def update_all_graphs(
                 go.Sankey(
                     arrangement='snap',
                     node=dict(
-                        pad=34,
-                        thickness=20,
-                        line=dict(color='#334155', width=0.5),
+                        pad=pad_no,
+                        thickness=espessura_no,
+                        line=dict(color='#334155', width=0.4),
                         label=node_labels,
                         x=node_x,
                         y=node_y,
