@@ -322,6 +322,7 @@ def _d6_combinado(df_d6, df_d3):
 @lru_cache(maxsize=8)
 def carregar_bundle(dataset_sel):
     """Carrega e prepara todos os dados do dataset (com o método combinado)."""
+    dataset_sel = dataset_sel or 'breast_cancer'
     df_d2 = carregar_csv_seguro('metricas_epocas', dataset_sel)
     df_d3 = carregar_csv_seguro('explicacoes_instancias', dataset_sel)
     df_d4 = carregar_csv_seguro('resumo_explicacoes', dataset_sel)
@@ -579,7 +580,6 @@ def construir_beeswarm(
     cd_all = np.vstack(cds)
     inst_all = np.concatenate(insts)
 
-    # Faixa sutil de destaque na linha da feature selecionada para colorir o 2D
     if feature_ativa and feature_ativa in top:
         idx_ativa = top.index(feature_ativa)
         fig.add_hrect(
@@ -590,7 +590,6 @@ def construir_beeswarm(
             line_color='rgba(37, 99, 235, 0.35)',
         )
 
-    # Marcadores clicáveis por linha/feature
     x_min_pad = float(x_all.min()) - 0.08 * max(float(np.ptp(x_all)), 1e-3)
     fig.add_trace(
         go.Scatter(
@@ -647,7 +646,6 @@ def construir_beeswarm(
         )
     )
 
-    # Realce das instâncias selecionadas (anel amarelo)
     if selecionadas:
         mask = np.isin(inst_all, list(selecionadas))
         if mask.any():
@@ -760,7 +758,6 @@ def processar_dados_sankey(df_d6, df_d3, df_d2, normalizar=True):
 
             metodos_d3 = sorted(d3_tmp['metodo_xai_norm'].unique())
 
-            # Soma total da importância por instância/época
             df_soma = (
                 d3_tmp.groupby(
                     ['metodo_xai_norm', 'epoca', 'instancia_id'], as_index=False
@@ -769,7 +766,6 @@ def processar_dados_sankey(df_d6, df_d3, df_d2, normalizar=True):
                 .rename(columns={'_imp': 'importancia_total'})
             )
 
-            # Feature dominante (maior peso absoluto na instância/época)
             if 'feature' in d3_tmp.columns:
                 d3_feat_agg = (
                     d3_tmp.groupby(
@@ -846,7 +842,7 @@ def processar_dados_sankey(df_d6, df_d3, df_d2, normalizar=True):
 
     epocas = sorted(df_base['epoca'].unique().tolist())
     transicoes = []
-    node_stats = {}  # (metodo_xai, epoca, classe_predita) -> info Top-1 Feature
+    node_stats = {}
 
     for m in metodos:
         if 'metodo_xai' in df_base.columns and m in metodos_d6:
@@ -909,7 +905,6 @@ def processar_dados_sankey(df_d6, df_d3, df_d2, normalizar=True):
                 df_m_base['peso_feature_dom'], errors='coerce'
             ).fillna(0.0)
 
-        # Estatísticas de Top-1 Feature dominante por nó (Época, Classe Predita)
         for cl in [0, 1]:
             prev_top_feat = None
             for ep in epocas:
@@ -960,8 +955,16 @@ def processar_dados_sankey(df_d6, df_d3, df_d2, normalizar=True):
             ep_origem = epocas[i]
             ep_destino = epocas[i + 1]
 
-            df_orig = df_m_base[df_m_base['epoca'] == ep_origem].set_index('instancia_id')
-            df_dest = df_m_base[df_m_base['epoca'] == ep_destino].set_index('instancia_id')
+            df_orig = (
+                df_m_base[df_m_base['epoca'] == ep_origem]
+                .drop_duplicates('instancia_id')
+                .set_index('instancia_id')
+            )
+            df_dest = (
+                df_m_base[df_m_base['epoca'] == ep_destino]
+                .drop_duplicates('instancia_id')
+                .set_index('instancia_id')
+            )
 
             common_insts = df_orig.index.intersection(df_dest.index)
             if common_insts.empty:
@@ -1055,7 +1058,7 @@ def processar_dados_sankey(df_d6, df_d3, df_d2, normalizar=True):
 @lru_cache(maxsize=8)
 def obter_sankey(dataset_sel):
     """Sankey processado a partir do bundle unificado do dataset."""
-    bundle = carregar_bundle(dataset_sel)
+    bundle = carregar_bundle(dataset_sel or 'breast_cancer')
     return processar_dados_sankey(
         bundle['d6'], bundle['d3'], bundle['d2'], normalizar=True
     )
@@ -1072,7 +1075,6 @@ def agregar_sankey_feature_dominante(df_trans_filtrado):
 
     df_work = df_trans_filtrado.copy()
 
-    # Identifica Top 5 features dominantes mais frequentes no recorte ativo
     contagem_orig = df_work['feature_dominante_origem'].value_counts()
     candidatas = [f for f in contagem_orig.index if str(f) != 'N/D']
     top5_features = list(candidatas[:5])
@@ -1140,6 +1142,7 @@ def construir_legenda_sankey(
     mapa_cores=None,
 ):
     """Constrói a barra de legenda dinâmica abaixo do gráfico Sankey."""
+    cor_sankey_sel = cor_sankey_sel or 'assertividade'
     estilo_container = {
         'display': 'flex',
         'flexWrap': 'wrap',
@@ -1403,7 +1406,6 @@ BADGE_LIMPAR_FEATURE = dbc.Badge(
     },
 )
 
-# Botões segmentados no cabeçalho do Sankey (Assertividade | Feature dominante)
 BOTOES_MODO_SANKEY = dbc.ButtonGroup(
     [
         dbc.Button(
@@ -1430,7 +1432,6 @@ BOTOES_MODO_SANKEY = dbc.ButtonGroup(
     size='sm',
 )
 
-# Seleção da forma de ordenar (ranking) as features do heatmap
 CONTROLE_HEATMAP_ORDEM = html.Div(
     [
         html.Label('Ordenar features por:', style=ESTILO_LABEL),
@@ -1609,7 +1610,6 @@ ABA_XAI = dbc.Tab(
     children=[
         html.Div(
             [
-                # 1. Sankey com botões Assertividade | Feature dominante + Legenda
                 dbc.Row([
                     coluna(
                         card_grafico(
@@ -1622,7 +1622,6 @@ ABA_XAI = dbc.Tab(
                         )
                     )
                 ]),
-                # 2. Espaço 2D + Beeswarm
                 dbc.Row([
                     coluna(
                         card_grafico(
@@ -1644,7 +1643,6 @@ ABA_XAI = dbc.Tab(
                         largura_pct='46.67%',
                     ),
                 ]),
-                # 3. Heatmap + Estabilidade
                 dbc.Row([
                     coluna(
                         card_grafico(
@@ -1664,7 +1662,6 @@ ABA_XAI = dbc.Tab(
                         largura_pct='46.67%',
                     ),
                 ]),
-                # 4. Tabela Auxiliar de Instâncias
                 dbc.Row([
                     coluna(
                         dbc.Card(
@@ -1852,6 +1849,7 @@ def sincronizar_modo_sankey(n_assert, n_feat, cor_atual):
     [Input('dropdown-dataset', 'value')],
 )
 def update_options(dataset_sel):
+    dataset_sel = dataset_sel or 'breast_cancer'
     bundle = carregar_bundle(dataset_sel)
     df_d3 = bundle['d3']
     df_d6 = bundle['d6']
@@ -1893,7 +1891,6 @@ def update_options(dataset_sel):
     )
 
 
-# CALLBACK PARA FEATURE SELECIONADA (APENAS VIA BEESWARM)
 @app.callback(
     Output('store-feature-selecionada', 'data'),
     [
@@ -1945,6 +1942,8 @@ def _obter_fluxos_sankey_filtrados(
     dataset_sel, metodo_sel, epocas_sel, cor_sankey_sel
 ):
     """Retorna (df_fluxos, metodo_alvo, categorias_top5_outras, mapa_cores)."""
+    dataset_sel = dataset_sel or 'breast_cancer'
+    cor_sankey_sel = cor_sankey_sel or 'assertividade'
     df_sankey_proc, _, df_trans_proc, _ = obter_sankey(dataset_sel)
     m_alvo_norm = str(metodo_sel or METODO_COMBINADO).upper().strip()
 
@@ -1960,7 +1959,7 @@ def _obter_fluxos_sankey_filtrados(
             else metodos_t.iloc[0]
         )
         df_t_fil = df_trans_proc[metodos_t == m_alvo].copy()
-        if epocas_sel:
+        if epocas_sel and len(epocas_sel) == 2:
             df_t_fil = df_t_fil[
                 (df_t_fil['epoca_origem'] >= epocas_sel[0])
                 & (df_t_fil['epoca_destino'] <= epocas_sel[1])
@@ -1980,7 +1979,7 @@ def _obter_fluxos_sankey_filtrados(
         else metodos_s.iloc[0]
     )
     df_s_fil = df_sankey_proc[metodos_s == m_alvo].copy()
-    if epocas_sel:
+    if epocas_sel and len(epocas_sel) == 2:
         df_s_fil = df_s_fil[
             (df_s_fil['epoca_origem'] >= epocas_sel[0])
             & (df_s_fil['epoca_destino'] <= epocas_sel[1])
@@ -1988,7 +1987,6 @@ def _obter_fluxos_sankey_filtrados(
     return df_s_fil, m_alvo, [], {}
 
 
-# CALLBACK CENTRAL DE ESTADO DE INSTÂNCIAS
 @app.callback(
     [
         Output('store-instancias-selecionadas', 'data'),
@@ -2052,7 +2050,6 @@ def gerenciar_estado_selecao(
 
     selected_ids = []
 
-    # 1. CLIQUE NO BEESWARM
     if (
         triggered_id == 'beeswarm-graph'
         and clickDataBeeswarm
@@ -2069,7 +2066,6 @@ def gerenciar_estado_selecao(
             else:
                 return [inst_id], inst_id
 
-    # 2. SELEÇÃO VIA SANKEY
     if (
         triggered_id == 'sankey-graph'
         and clickDataSankey
@@ -2085,7 +2081,7 @@ def gerenciar_estado_selecao(
                 row_flow = df_fil.iloc[pt_s['pointNumber']]
                 ids_sankey = [str(x) for x in row_flow['lista_instancias']]
 
-                df_d6 = carregar_bundle(dataset_sel)['d6']
+                df_d6 = carregar_bundle(dataset_sel or 'breast_cancer')['d6']
                 if not df_d6.empty and 'classe_predita' in df_d6.columns:
                     epoca_check = row_flow['epoca_origem']
                     classe_origem_alvo = row_flow['classe_origem']
@@ -2099,7 +2095,6 @@ def gerenciar_estado_selecao(
 
                 return ids_sankey, None
 
-    # 3. SELEÇÃO VIA BRUSHING NO SPATIAL SCATTER (2D)
     if triggered_id == 'dim-scatter-graph':
         if (
             selectedDataScatter is not None
@@ -2127,7 +2122,6 @@ def gerenciar_estado_selecao(
                     return [], None
                 return [inst_id], None
 
-    # 4. SELEÇÃO VIA TABELA
     if (
         triggered_id == 'dim-tabela-instancias'
         and selected_rows_table
@@ -2141,7 +2135,6 @@ def gerenciar_estado_selecao(
     return state_selected_ids or [], state_last_box
 
 
-# CALLBACK PRINCIPAL DOS GRÁFICOS
 @app.callback(
     [
         Output('performance-graph', 'figure'),
@@ -2190,6 +2183,14 @@ def update_all_graphs(
     clickDataSankey,
     btn_badge_clicks,
 ):
+    dataset_sel = dataset_sel or 'breast_cancer'
+    metodo_sel = metodo_sel or METODO_COMBINADO
+    metrica_est_sel = metrica_est_sel or 'spearman'
+    cor_sankey_sel = cor_sankey_sel or 'assertividade'
+    algo_sel = algo_sel or 'TSNE'
+    cor_proj_sel = cor_proj_sel or 'classe_predita'
+    heatmap_ordem = heatmap_ordem or 'media'
+
     bundle = carregar_bundle(dataset_sel)
     df_d2 = bundle['d2']
     df_d3 = bundle['d3']
@@ -2423,7 +2424,10 @@ def update_all_graphs(
 
                 fig_heat.update_layout(
                     height=500,
-                    title=f'Heatmap de Importância Normalizada ({heat_label}) - {ordem_label}',
+                    title=(
+                        f'Heatmap de Importância Normalizada ({heat_label}) -'
+                        f' {ordem_label}'
+                    ),
                     xaxis=dict(title='Época'),
                     yaxis=dict(
                         tickmode='array',
@@ -2837,7 +2841,6 @@ def update_all_graphs(
         sources, targets, values, link_colors, hover_texts = [], [], [], [], []
 
         if cor_sankey_sel == 'feature_dominante':
-            # Calcula o volume de instâncias em cada sub-nó (Época, Classe, Feature_Cat)
             volume_subno = {}
             for _, row in df_filtered_s.iterrows():
                 k_o = (
@@ -2854,8 +2857,6 @@ def update_all_graphs(
                 volume_subno[k_o] = max(volume_subno.get(k_o, 0), qtd)
                 volume_subno[k_d] = max(volume_subno.get(k_d, 0), qtd)
 
-            # Cria sub-nós empilhados por categoria (Top 5 + Outras features) em cada (Época, Classe)
-            # Ordem visual: Classe 1 no bloco superior (y ~ 0.05..0.44), Classe 0 no bloco inferior (y ~ 0.54..0.95)
             for i_ep, ep in enumerate(epocas_unicas):
                 x_pos = 0.03 + 0.94 * (i_ep / max(1, len(epocas_unicas) - 1))
 
@@ -2874,13 +2875,11 @@ def update_all_graphs(
                         if volume_subno.get((int(ep), int(cl), cat), 0) > 0
                     ]
                     if not sub_ativos:
-                        sub_ativos = list(cats_feat_dom)
+                        sub_ativos = list(cats_feat_dom) or [LABEL_OUTRAS_FEATURES]
 
-                    # Posicionamento vertical dos sub-blocos dentro da faixa da classe
                     y_ini, y_fim = (0.04, 0.43) if cl == 1 else (0.55, 0.95)
                     n_sub = max(1, len(sub_ativos))
 
-                    # Identifica o sub-nó com maior volume para ancorar o título do grupo (ex: ★ worst radius ◆ / Benigno · 21%)
                     idx_label = int(
                         np.argmax([
                             volume_subno.get((int(ep), int(cl), c), 0)
@@ -2903,6 +2902,12 @@ def update_all_graphs(
                         cor_hex = mapa_cores_features.get(
                             feat_cat, COR_OUTRAS_FEATURES
                         )
+                        nota_mudanca = (
+                            '<br><b>◆ Critério líder mudou</b> em relação à'
+                            ' época anterior'
+                            if mudou_criterio
+                            else ''
+                        )
                         node_labels.append(label_no)
                         node_colors.append(cor_hex)
                         node_customdata.append(
@@ -2910,12 +2915,7 @@ def update_all_graphs(
                             f'<b>Segmento Feature:</b> {feat_cat}<br>'
                             f'<b>Feature Líder do Grupo:</b> ★ {top_feat}'
                             f' ({top_prop*100:.1f}%)'
-                            + (
-                                '<br><b>◆ Critério líder mudou</b> em relação à'
-                                ' época anterior'
-                                if mudou_criterio
-                                else ''
-                            )
+                            f'{nota_mudanca}'
                         )
 
                         frac = (idx_c + 0.5) / n_sub
@@ -2993,6 +2993,12 @@ def update_all_graphs(
                     else:
                         label_no = f'Época {ep} — {nome_classe}'
 
+                    nota_mudanca = (
+                        '<br><b>◆ Critério de decisão mudou</b> em relação à'
+                        ' época anterior'
+                        if mudou_criterio
+                        else ''
+                    )
                     node_labels.append(label_no)
                     node_colors.append('#e2e8f0')
                     node_customdata.append(
@@ -3000,12 +3006,7 @@ def update_all_graphs(
                         f'<b>Instâncias previstas na classe:</b> {total_no}<br>'
                         f'<b>Feature Líder (Top-1):</b> ★ {top_feat}'
                         f' ({top_prop*100:.1f}% das instâncias do nó)'
-                        + (
-                            '<br><b>◆ Critério de decisão mudou</b> em relação à'
-                            ' época anterior'
-                            if mudou_criterio
-                            else ''
-                        )
+                        f'{nota_mudanca}'
                     )
 
                     x_pos = 0.05 + 0.9 * (i_ep / max(1, len(epocas_unicas) - 1))
@@ -3086,7 +3087,7 @@ def update_all_graphs(
             if cor_sankey_sel == 'feature_dominante'
             else 'Assertividade'
             if cor_sankey_sel == 'assertividade'
-            else cor_sankey_sel.capitalize()
+            else str(cor_sankey_sel).capitalize()
         )
 
         fig_sankey = go.Figure(
@@ -3265,7 +3266,6 @@ def update_all_graphs(
     )
 
 
-# CALLBACK TABELA
 @app.callback(
     Output('dim-tabela-instancias', 'data'),
     [
@@ -3279,6 +3279,8 @@ def update_all_graphs(
 def update_table_from_store(
     instancias_selecionadas, dataset_sel, metodo_sel, epoca_proj_sel, algo_sel
 ):
+    dataset_sel = dataset_sel or 'breast_cancer'
+    metodo_sel = metodo_sel or METODO_COMBINADO
     bundle = carregar_bundle(dataset_sel)
     df_d6 = bundle['d6']
     df_d3 = bundle['d3']
