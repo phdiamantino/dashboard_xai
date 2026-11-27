@@ -697,186 +697,180 @@ def construir_beeswarm(
     return fig
 
 
-def carregar_dados_sankey(dataset_sel):
-    info = MAPA_DATASET.get(dataset_sel, {})
-    f_d2 = f'metricas_epocas_{dataset_sel}.csv'
-    f_d3 = info.get('arquivo_d3', 'explicacoes_instancias.csv')
-
-    if not os.path.exists(f_d2):
-        f_d2 = 'metricas_epocas.csv'
-    if not os.path.exists(f_d3):
-        f_d3 = 'explicacoes_instancias.csv'
-
-    try:
-        df_d2 = pd.read_csv(f_d2) if os.path.exists(f_d2) else pd.DataFrame()
-        df_d3 = pd.read_csv(f_d3) if os.path.exists(f_d3) else pd.DataFrame()
-
-        if not df_d2.empty:
-            df_d2.columns = df_d2.columns.astype(str).str.strip().str.lower()
-        if not df_d3.empty:
-            df_d3.columns = df_d3.columns.astype(str).str.strip().str.lower()
-    except Exception as e:
-        print(f'[Aviso] Erro ao carregar arquivos ({dataset_sel}): {str(e)}')
-        return pd.DataFrame(), pd.DataFrame()
-
-    modelo_alvo = info.get('modelo_id', 'MLP_5L_BREAST_CANCER')
-    if (
-        not df_d3.empty
-        and 'modelo_id' in df_d3.columns
-        and (df_d3['modelo_id'] == modelo_alvo).any()
-    ):
-        df_d3 = df_d3[df_d3['modelo_id'] == modelo_alvo].copy()
-    if (
-        not df_d2.empty
-        and 'modelo_id' in df_d2.columns
-        and (df_d2['modelo_id'] == modelo_alvo).any()
-    ):
-        df_d2 = df_d2[df_d2['modelo_id'] == modelo_alvo].copy()
-
-    return df_d3, df_d2
-
-
-def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
-    if df_d3.empty or df_d2.empty:
+def processar_dados_sankey(df_d6, df_d3, df_d2, normalizar=True):
+    """Constrói as transições temporais do Sankey usando df_d6 como base
+    completa de instâncias/predições e df_d3 para importância XAI."""
+    req_d6 = {'epoca', 'instancia_id', 'classe_real', 'classe_predita'}
+    if df_d6 is None or df_d6.empty or not req_d6.issubset(df_d6.columns):
         return pd.DataFrame(), [], pd.DataFrame()
 
-    df_d3 = df_d3.copy()
-    if 'importancia_absoluta' not in df_d3.columns:
-        if 'valor_atribuicao' in df_d3.columns:
-            df_d3['importancia_absoluta'] = df_d3['valor_atribuicao'].abs()
-        else:
-            df_d3['importancia_absoluta'] = 1.0
+    df_base = df_d6.copy()
+    df_base['instancia_id'] = df_base['instancia_id'].astype(str)
+    df_base['epoca'] = pd.to_numeric(df_base['epoca'], errors='coerce')
+    df_base['classe_real'] = pd.to_numeric(df_base['classe_real'], errors='coerce')
+    df_base['classe_predita'] = pd.to_numeric(df_base['classe_predita'], errors='coerce')
+    df_base = df_base.dropna(subset=['epoca', 'classe_real', 'classe_predita'])
+    df_base['epoca'] = df_base['epoca'].astype(int)
+    df_base['classe_real'] = df_base['classe_real'].astype(int)
+    df_base['classe_predita'] = df_base['classe_predita'].astype(int)
 
-    if normalizar:
-        df_d3 = normalizar_coluna_por_grupo(
-            df_d3, 'importancia_absoluta', ['metodo_xai']
-        )
-
-    if 'instancia_id' not in df_d3.columns:
-        for col in ['instance_id', 'id', 'sample_id']:
-            if col in df_d3.columns:
-                df_d3['instancia_id'] = df_d3[col].astype(str)
-                break
-        if 'instancia_id' not in df_d3.columns:
-            df_d3['instancia_id'] = [str(i) for i in range(len(df_d3))]
-    else:
-        df_d3['instancia_id'] = df_d3['instancia_id'].astype(str)
-
-    df_d3 = combinar_metodos_xai(
-        df_d3,
-        ['epoca', 'instancia_id', 'feature'],
-        ['importancia_absoluta', 'valor_atribuicao'],
-    )
-
-    agg_dict = {'importancia_absoluta': 'sum'}
-    if 'classe_real' in df_d3.columns:
-        agg_dict['classe_real'] = 'first'
-    if 'classe_predita' in df_d3.columns:
-        agg_dict['classe_predita'] = 'first'
-
-    df_inst_summary = (
-        df_d3.groupby(['metodo_xai', 'epoca', 'instancia_id'])
-        .agg(agg_dict)
-        .reset_index()
-        .rename(columns={'importancia_absoluta': 'importancia_total'})
-    )
-
-    if normalizar:
-        df_inst_summary = normalizar_coluna_por_grupo(
-            df_inst_summary, 'importancia_total', ['metodo_xai']
-        )
-
-    df_inst_summary['epoca'] = (
-        pd.to_numeric(df_inst_summary['epoca'], errors='coerce')
-        .fillna(0)
-        .astype(int)
-    )
-
-    acc_col = 'accuracy' if 'accuracy' in df_d2.columns else df_d2.columns[1]
-    loss_col = (
-        'loss_validacao'
-        if 'loss_validacao' in df_d2.columns
-        else (df_d2.columns[2] if len(df_d2.columns) > 2 else acc_col)
-    )
-
-    df_d2_sub = df_d2[['epoca', acc_col, loss_col]].copy()
-    df_d2_sub.columns = ['epoca', 'accuracy', 'loss_validacao']
-    df_d2_sub['epoca'] = (
-        pd.to_numeric(df_d2_sub['epoca'], errors='coerce').fillna(0).astype(int)
-    )
-
-    df_inst_summary = df_inst_summary.merge(df_d2_sub, on='epoca', how='left')
-
-    if 'classe_real' not in df_inst_summary.columns:
-        prop_c1 = {
-            'breast_cancer': 0.37,
-            'wine_quality': 0.22,
-            'german_credit': 0.70,
-        }.get(dataset_sel, 0.5)
-        np.random.seed(abs(hash(dataset_sel)) % (2**32))
-        unique_insts = df_inst_summary['instancia_id'].unique()
-        cls_map = {inst: int(np.random.rand() < prop_c1) for inst in unique_insts}
-        df_inst_summary['classe_real'] = df_inst_summary['instancia_id'].map(cls_map)
-
-    if 'classe_predita' not in df_inst_summary.columns:
-        df_inst_summary['confianca_media'] = df_inst_summary[
-            'accuracy'
-        ] * np.random.uniform(0.85, 1.0, len(df_inst_summary))
-        df_inst_summary['classe_predita'] = df_inst_summary['classe_real']
-        erros_mask = (
-            np.random.rand(len(df_inst_summary)) > df_inst_summary['accuracy']
-        )
-        df_inst_summary.loc[erros_mask, 'classe_predita'] = 1 - df_inst_summary.loc[
-            erros_mask, 'classe_real'
+    if 'metodo_xai' in df_base.columns:
+        metodos_d6 = [
+            str(m).upper().strip()
+            for m in df_base['metodo_xai'].dropna().unique()
         ]
     else:
-        df_inst_summary['confianca_media'] = df_inst_summary['accuracy']
+        metodos_d6 = []
 
-    df_inst_summary['acerto'] = (
-        df_inst_summary['classe_predita'] == df_inst_summary['classe_real']
-    ).astype(int)
-    df_inst_summary['taxa_erro'] = 1.0 - df_inst_summary['acerto']
+    metodos_d3 = []
+    df_imp_inst = pd.DataFrame(
+        columns=['metodo_xai_norm', 'epoca', 'instancia_id', 'importancia_total']
+    )
 
-    epocas = sorted([int(x) for x in df_inst_summary['epoca'].unique()])
-    metodos = [str(m) for m in df_inst_summary['metodo_xai'].unique()]
+    if df_d3 is not None and not df_d3.empty and 'epoca' in df_d3.columns:
+        d3_tmp = df_d3.copy()
+        d3_tmp['instancia_id'] = d3_tmp['instancia_id'].astype(str)
+        d3_tmp['epoca'] = pd.to_numeric(d3_tmp['epoca'], errors='coerce')
+        d3_tmp = d3_tmp.dropna(subset=['epoca'])
+        d3_tmp['epoca'] = d3_tmp['epoca'].astype(int)
 
+        if 'importancia_absoluta' in d3_tmp.columns:
+            col_imp = 'importancia_absoluta'
+        elif 'valor_atribuicao' in d3_tmp.columns:
+            col_imp = 'valor_atribuicao'
+        else:
+            col_imp = None
+
+        if col_imp is not None:
+            d3_tmp['_imp'] = pd.to_numeric(d3_tmp[col_imp], errors='coerce').abs().fillna(0.0)
+            if 'metodo_xai' in d3_tmp.columns:
+                d3_tmp['metodo_xai_norm'] = (
+                    d3_tmp['metodo_xai'].astype(str).str.upper().str.strip()
+                )
+                metodos_d3 = sorted(d3_tmp['metodo_xai_norm'].unique())
+                df_imp_inst = (
+                    d3_tmp.groupby(['metodo_xai_norm', 'epoca', 'instancia_id'], as_index=False)['_imp']
+                    .sum()
+                    .rename(columns={'_imp': 'importancia_total'})
+                )
+                if normalizar and not df_imp_inst.empty:
+                    df_imp_inst = normalizar_coluna_por_grupo(
+                        df_imp_inst, 'importancia_total', ['metodo_xai_norm']
+                    )
+            else:
+                df_imp_inst = (
+                    d3_tmp.groupby(['epoca', 'instancia_id'], as_index=False)['_imp']
+                    .sum()
+                    .rename(columns={'_imp': 'importancia_total'})
+                )
+                if normalizar and not df_imp_inst.empty:
+                    df_imp_inst = normalizar_coluna_por_grupo(
+                        df_imp_inst, 'importancia_total', []
+                    )
+
+    metodos = sorted(set(metodos_d6) | set(metodos_d3))
+    if not metodos:
+        metodos = [METODO_COMBINADO]
+    elif METODO_COMBINADO not in metodos and metodos_d3:
+        metodos.append(METODO_COMBINADO)
+
+    df_acc_ep = pd.DataFrame(columns=['epoca', 'accuracy_epoca'])
+    if df_d2 is not None and not df_d2.empty and 'epoca' in df_d2.columns:
+        acc_col = 'accuracy' if 'accuracy' in df_d2.columns else (
+            df_d2.columns[1] if len(df_d2.columns) > 1 else None
+        )
+        if acc_col:
+            df_acc_ep = df_d2[['epoca', acc_col]].copy()
+            df_acc_ep['epoca'] = pd.to_numeric(df_acc_ep['epoca'], errors='coerce')
+            df_acc_ep['accuracy_epoca'] = pd.to_numeric(df_acc_ep[acc_col], errors='coerce')
+            df_acc_ep = df_acc_ep.dropna(subset=['epoca', 'accuracy_epoca'])
+            df_acc_ep['epoca'] = df_acc_ep['epoca'].astype(int)
+            df_acc_ep = df_acc_ep.groupby('epoca', as_index=False)['accuracy_epoca'].mean()
+
+    epocas = sorted(df_base['epoca'].unique().tolist())
     transicoes = []
+
     for m in metodos:
-        df_m = df_inst_summary[df_inst_summary['metodo_xai'] == m]
+        if 'metodo_xai' in df_base.columns and m in metodos_d6:
+            df_m_base = df_base[
+                df_base['metodo_xai'].astype(str).str.upper().str.strip() == m
+            ].copy()
+            if df_m_base.empty:
+                df_m_base = df_base.drop_duplicates(['epoca', 'instancia_id']).copy()
+        else:
+            df_m_base = df_base.drop_duplicates(['epoca', 'instancia_id']).copy()
+
+        df_m_base = df_m_base.drop_duplicates(['epoca', 'instancia_id'], keep='first')
+
+        if not df_imp_inst.empty:
+            if 'metodo_xai_norm' in df_imp_inst.columns:
+                if m in metodos_d3:
+                    imp_m = df_imp_inst[df_imp_inst['metodo_xai_norm'] == m][
+                        ['epoca', 'instancia_id', 'importancia_total']
+                    ]
+                else:
+                    imp_m = (
+                        df_imp_inst.groupby(['epoca', 'instancia_id'], as_index=False)[
+                            'importancia_total'
+                        ].mean()
+                    )
+            else:
+                imp_m = df_imp_inst[['epoca', 'instancia_id', 'importancia_total']]
+
+            df_m_base = df_m_base.merge(
+                imp_m, on=['epoca', 'instancia_id'], how='left'
+            )
+
+        if 'importancia_total' not in df_m_base.columns:
+            df_m_base['importancia_total'] = 0.0
+        else:
+            df_m_base['importancia_total'] = pd.to_numeric(
+                df_m_base['importancia_total'], errors='coerce'
+            ).fillna(0.0)
+
+        if not df_acc_ep.empty:
+            df_m_base = df_m_base.merge(df_acc_ep, on='epoca', how='left')
+
+        if 'confianca' in df_m_base.columns:
+            df_m_base['conf_inst'] = pd.to_numeric(
+                df_m_base['confianca'], errors='coerce'
+            )
+        elif 'confianca_media' in df_m_base.columns:
+            df_m_base['conf_inst'] = pd.to_numeric(
+                df_m_base['confianca_media'], errors='coerce'
+            )
+        elif 'accuracy_epoca' in df_m_base.columns:
+            df_m_base['conf_inst'] = df_m_base['accuracy_epoca']
+        else:
+            df_m_base['conf_inst'] = np.nan
+
         for i in range(len(epocas) - 1):
             ep_origem = epocas[i]
             ep_destino = epocas[i + 1]
 
-            df_orig = df_m[df_m['epoca'] == ep_origem].set_index('instancia_id')
-            df_dest = df_m[df_m['epoca'] == ep_destino].set_index('instancia_id')
+            df_orig = df_m_base[df_m_base['epoca'] == ep_origem].set_index('instancia_id')
+            df_dest = df_m_base[df_m_base['epoca'] == ep_destino].set_index('instancia_id')
 
             common_insts = df_orig.index.intersection(df_dest.index)
+            if common_insts.empty:
+                continue
 
             for inst_id in common_insts:
                 row_o = df_orig.loc[inst_id]
                 row_d = df_dest.loc[inst_id]
 
-                val_o = float(
-                    row_o['importancia_total']
-                    if not isinstance(row_o['importancia_total'], pd.Series)
-                    else row_o['importancia_total'].iloc[0]
-                )
-                val_d = float(
-                    row_d['importancia_total']
-                    if not isinstance(row_d['importancia_total'], pd.Series)
-                    else row_d['importancia_total'].iloc[0]
-                )
+                val_o = float(row_o['importancia_total'])
+                val_d = float(row_d['importancia_total'])
+                c_orig = int(row_o['classe_predita'])
+                c_dest = int(row_d['classe_predita'])
+                c_real = int(row_d['classe_real'])
 
-                c_orig = int(
-                    row_o['classe_predita']
-                    if not isinstance(row_o['classe_predita'], pd.Series)
-                    else row_o['classe_predita'].iloc[0]
-                )
-                c_dest = int(
-                    row_d['classe_predita']
-                    if not isinstance(row_d['classe_predita'], pd.Series)
-                    else row_d['classe_predita'].iloc[0]
-                )
+                acerto_o = 1.0 if c_orig == int(row_o['classe_real']) else 0.0
+                acerto_d = 1.0 if c_dest == c_real else 0.0
+                taxa_erro_inst = 1.0 - ((acerto_o + acerto_d) / 2.0)
+
+                conf_o = row_o['conf_inst'] if pd.notna(row_o['conf_inst']) else (acerto_o * 0.9 + 0.05)
+                conf_d = row_d['conf_inst'] if pd.notna(row_d['conf_inst']) else (acerto_d * 0.9 + 0.05)
 
                 transicoes.append({
                     'metodo_xai': m,
@@ -885,28 +879,9 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
                     'instancia_id': str(inst_id),
                     'classe_origem': c_orig,
                     'classe_destino': c_dest,
-                    'classe_real': int(
-                        row_o['classe_real']
-                        if not isinstance(row_o['classe_real'], pd.Series)
-                        else row_o['classe_real'].iloc[0]
-                    ),
-                    'confianca_media': float(
-                        (row_o['confianca_media'] + row_d['confianca_media']) / 2.0
-                        if not isinstance(row_o['confianca_media'], pd.Series)
-                        else (
-                            row_o['confianca_media'].iloc[0]
-                            + row_d['confianca_media'].iloc[0]
-                        )
-                        / 2.0
-                    ),
-                    'taxa_erro': float(
-                        (row_o['taxa_erro'] + row_d['taxa_erro']) / 2.0
-                        if not isinstance(row_o['taxa_erro'], pd.Series)
-                        else (
-                            row_o['taxa_erro'].iloc[0] + row_d['taxa_erro'].iloc[0]
-                        )
-                        / 2.0
-                    ),
+                    'classe_real': c_real,
+                    'confianca_media': float((float(conf_o) + float(conf_d)) / 2.0),
+                    'taxa_erro': float(taxa_erro_inst),
                     'importancia_media': float((val_o + val_d) / 2.0),
                 })
 
@@ -914,7 +889,6 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
     if df_trans.empty:
         return pd.DataFrame(), epocas, pd.DataFrame()
 
-    # Quebra do groupby incluindo 'classe_real' para formar a Matriz de Confusão nos fluxos
     df_sankey = (
         df_trans.groupby([
             'metodo_xai',
@@ -941,9 +915,11 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
 
 @lru_cache(maxsize=8)
 def obter_sankey(dataset_sel):
-    """Sankey processado (cacheado por dataset). Não modificar in-place."""
-    df_d3_s, df_d2_s = carregar_dados_sankey(dataset_sel)
-    return processar_dados_sankey(df_d3_s, df_d2_s, dataset_sel, normalizar=True)
+    """Sankey processado a partir do bundle unificado do dataset."""
+    bundle = carregar_bundle(dataset_sel)
+    return processar_dados_sankey(
+        bundle['d6'], bundle['d3'], bundle['d2'], normalizar=True
+    )
 
 
 # ==========================================
@@ -1578,7 +1554,6 @@ def gerenciar_estado_selecao(
     ):
         p_bee = clickDataBeeswarm['points'][0]
         if 'customdata' in p_bee and len(p_bee['customdata']) > 0:
-            # Se clicou apenas no marcador de seleção da feature, não altera seleção de instância
             if str(p_bee['customdata'][0]) == '__FEATURE_ONLY__':
                 return state_selected_ids or [], state_last_box
             inst_id = str(p_bee['customdata'][0])
@@ -1598,12 +1573,14 @@ def gerenciar_estado_selecao(
         if 'pointNumber' in pt_s:
             df_sankey_proc, _, _ = obter_sankey(dataset_sel)
             if not df_sankey_proc.empty:
+                m_alvo_norm = str(metodo_sel or METODO_COMBINADO).upper().strip()
+                metodos_proc = df_sankey_proc['metodo_xai'].astype(str).str.upper().str.strip()
                 m_alvo = (
-                    metodo_sel
-                    if metodo_sel in df_sankey_proc['metodo_xai'].unique()
-                    else df_sankey_proc['metodo_xai'].iloc[0]
+                    m_alvo_norm
+                    if m_alvo_norm in metodos_proc.unique()
+                    else metodos_proc.iloc[0]
                 )
-                df_fil = df_sankey_proc[df_sankey_proc['metodo_xai'] == m_alvo]
+                df_fil = df_sankey_proc[metodos_proc == m_alvo]
                 if epocas_sel:
                     df_fil = df_fil[
                         (df_fil['epoca_origem'] >= epocas_sel[0])
@@ -1620,11 +1597,7 @@ def gerenciar_estado_selecao(
                         classe_origem_alvo = row_flow['classe_origem']
 
                         df_d6_sub = df_d6[
-                            (
-                                df_d6['metodo_xai'].astype(str).str.upper()
-                                == str(m_alvo).upper()
-                            )
-                            & (df_d6['epoca'] == int(epoca_check))
+                            (df_d6['epoca'] == int(epoca_check))
                             & (df_d6['classe_predita'] == int(classe_origem_alvo))
                         ]
                         valid_ids_set = set(df_d6_sub['instancia_id'].astype(str))
@@ -1997,13 +1970,15 @@ def update_all_graphs(
         pt_s = clickDataSankey['points'][0]
         if 'pointNumber' in pt_s and not df_sankey_processed.empty:
             flow_idx = pt_s['pointNumber']
+            m_alvo_norm = str(metodo_sel or METODO_COMBINADO).upper().strip()
+            metodos_proc = df_sankey_processed['metodo_xai'].astype(str).str.upper().str.strip()
             m_alvo = (
-                metodo_sel
-                if metodo_sel in df_sankey_processed['metodo_xai'].unique()
-                else df_sankey_processed['metodo_xai'].iloc[0]
+                m_alvo_norm
+                if m_alvo_norm in metodos_proc.unique()
+                else metodos_proc.iloc[0]
             )
             df_filtered_s = df_sankey_processed[
-                df_sankey_processed['metodo_xai'] == m_alvo
+                metodos_proc == m_alvo
             ].copy()
             if epocas_sel:
                 df_filtered_s = df_filtered_s[
@@ -2017,11 +1992,7 @@ def update_all_graphs(
 
                 if not df_d6.empty and 'classe_predita' in df_d6.columns:
                     df_d6_ep = df_d6[
-                        (
-                            df_d6['metodo_xai'].astype(str).str.upper()
-                            == str(m_alvo).upper()
-                        )
-                        & (df_d6['epoca'] == int(row_flow['epoca_origem']))
+                        (df_d6['epoca'] == int(row_flow['epoca_origem']))
                         & (df_d6['classe_predita'] == int(row_flow['classe_origem']))
                     ]
                     valid_ids_set = set(df_d6_ep['instancia_id'].astype(str))
@@ -2356,14 +2327,15 @@ def update_all_graphs(
     # ----------------------------------------------------
     fig_sankey = go.Figure()
     if not df_sankey_processed.empty:
-        metodos_validos = df_sankey_processed['metodo_xai'].unique()
+        m_alvo_norm = str(metodo_sel or METODO_COMBINADO).upper().strip()
+        metodos_proc = df_sankey_processed['metodo_xai'].astype(str).str.upper().str.strip()
         m_alvo = (
-            metodo_sel
-            if metodo_sel in metodos_validos
-            else metodos_validos[0]
+            m_alvo_norm
+            if m_alvo_norm in metodos_proc.unique()
+            else metodos_proc.iloc[0]
         )
         df_filtered = df_sankey_processed[
-            df_sankey_processed['metodo_xai'] == m_alvo
+            metodos_proc == m_alvo
         ].copy()
 
         if epocas_sel:
@@ -2419,16 +2391,16 @@ def update_all_graphs(
 
                     if acertou_orig and acertou_dest:
                         status_assert = 'Acerto Mantido (Verde Esmeralda)'
-                        rgb_assert = '16, 185, 129'  # Verde Esmeralda
+                        rgb_assert = '16, 185, 129'
                     elif not acertou_orig and acertou_dest:
-                        status_assert = 'Acerto Corrigido (Verde/Ciano)'
-                        rgb_assert = '5, 150, 105'   # Verde Esmeralda Intenso
+                        status_assert = 'Acerto Corrigido (Verde Esmeralda)'
+                        rgb_assert = '5, 150, 105'
                     elif acertou_orig and not acertou_dest:
                         status_assert = 'Instabilidade / Novo Erro (Âmbar)'
-                        rgb_assert = '245, 158, 11'  # Âmbar / Amarelo
+                        rgb_assert = '245, 158, 11'
                     else:
                         status_assert = 'Erro Persistente (Vermelho)'
-                        rgb_assert = '239, 68, 68'   # Vermelho
+                        rgb_assert = '239, 68, 68'
 
                     if cor_sankey_sel == 'assertividade':
                         base_rgb = rgb_assert
