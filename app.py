@@ -914,6 +914,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
     if df_trans.empty:
         return pd.DataFrame(), epocas, pd.DataFrame()
 
+    # Quebra do groupby incluindo 'classe_real' para formar a Matriz de Confusão nos fluxos
     df_sankey = (
         df_trans.groupby([
             'metodo_xai',
@@ -921,6 +922,7 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
             'epoca_destino',
             'classe_origem',
             'classe_destino',
+            'classe_real',
         ])
         .agg(
             qtd_instancias=('instancia_id', 'count'),
@@ -929,7 +931,6 @@ def processar_dados_sankey(df_d3, df_d2, dataset_sel, normalizar=True):
             taxa_erro=('taxa_erro', 'mean'),
             importancia_media=('importancia_media', 'mean'),
             exemplo_instancia=('instancia_id', 'first'),
-            classe_real_dominante=('classe_real', lambda x: int(x.mode()[0])),
             lista_instancias=('instancia_id', lambda x: [str(i) for i in list(x)]),
         )
         .reset_index()
@@ -1155,11 +1156,15 @@ SIDEBAR = dbc.Col(
                     'Cores (Sankey):',
                     'dropdown-cor-metrica',
                     [
+                        {
+                            'label': 'Assertividade (Matriz de Confusão)',
+                            'value': 'assertividade',
+                        },
                         {'label': 'Classe Predita', 'value': 'classe'},
                         {'label': 'Confiança', 'value': 'confianca'},
                         {'label': 'Taxa de Erro', 'value': 'erro'},
                     ],
-                    'classe',
+                    'assertividade',
                 ),
                 html.Hr(style={'borderColor': '#cbd5e1', 'margin': '10px 0'}),
                 html.Div(
@@ -2347,7 +2352,7 @@ def update_all_graphs(
     )
 
     # ----------------------------------------------------
-    # 6. SANKEY TEMPORAL DE EXPLICAÇÕES
+    # 6. SANKEY TEMPORAL DE EXPLICAÇÕES (COM MATRIZ DE CONFUSÃO)
     # ----------------------------------------------------
     fig_sankey = go.Figure()
     if not df_sankey_processed.empty:
@@ -2403,11 +2408,33 @@ def update_all_graphs(
                     values.append(val_fluxo)
 
                     conf = float(row['confianca_media'])
-                    alpha = max(0.30, min(0.85, conf))
+                    alpha = max(0.35, min(0.85, conf))
 
-                    if cor_sankey_sel == 'classe':
+                    c_orig = int(row['classe_origem'])
+                    c_dest = int(row['classe_destino'])
+                    c_real = int(row['classe_real'])
+
+                    acertou_orig = c_orig == c_real
+                    acertou_dest = c_dest == c_real
+
+                    if acertou_orig and acertou_dest:
+                        status_assert = 'Acerto Mantido (Verde Esmeralda)'
+                        rgb_assert = '16, 185, 129'  # Verde Esmeralda
+                    elif not acertou_orig and acertou_dest:
+                        status_assert = 'Acerto Corrigido (Verde/Ciano)'
+                        rgb_assert = '5, 150, 105'   # Verde Esmeralda Intenso
+                    elif acertou_orig and not acertou_dest:
+                        status_assert = 'Instabilidade / Novo Erro (Âmbar)'
+                        rgb_assert = '245, 158, 11'  # Âmbar / Amarelo
+                    else:
+                        status_assert = 'Erro Persistente (Vermelho)'
+                        rgb_assert = '239, 68, 68'   # Vermelho
+
+                    if cor_sankey_sel == 'assertividade':
+                        base_rgb = rgb_assert
+                    elif cor_sankey_sel == 'classe':
                         base_rgb = (
-                            '37, 99, 235' if row['classe_origem'] == 0 else '249, 115, 22'
+                            '37, 99, 235' if c_orig == 0 else '249, 115, 22'
                         )
                     elif cor_sankey_sel == 'confianca':
                         base_rgb = f'{int(255*(1-conf))}, {int(200*conf)}, 150'
@@ -2418,20 +2445,27 @@ def update_all_graphs(
                     link_colors.append(f'rgba({base_rgb}, {alpha:.2f})')
 
                     hover_text = (
-                        f'<b>Dataset:</b> {dataset_sel.upper()}<br><b>Método XAI:</b>'
-                        f' {m_alvo}<br><b>Transição:</b> Época {row["epoca_origem"]}'
-                        f' &rarr; Época {row["epoca_destino"]}<br><b>Classe Predita:</b>'
-                        f' {map_cls.get(row["classe_origem"])} &rarr;'
-                        f' {map_cls.get(row["classe_destino"])}<br><b>Classe Real'
-                        ' Dominante:</b>'
-                        f' {map_cls.get(row["classe_real_dominante"])}<br><b>Qtd'
-                        f' Instâncias:</b> {row["qtd_instancias"]}<br><b>Exemplo ID:</b>'
-                        f' #{row["exemplo_instancia"]}<br><b>Confiança Média:</b>'
-                        f' {conf*100:.1f}%<br><b>Taxa Erro Média:</b>'
-                        f' {row["taxa_erro"]*100:.1f}%<br><b>Importância Média XAI'
-                        f':</b> {row["importancia_media"]:.4f}'
+                        f'<b>Dataset:</b> {dataset_sel.upper()}<br>'
+                        f'<b>Método XAI:</b> {m_alvo}<br>'
+                        f'<b>Transição:</b> Época {row["epoca_origem"]}'
+                        f' &rarr; Época {row["epoca_destino"]}<br>'
+                        f'<b>Classe Real:</b> {map_cls.get(c_real)}<br>'
+                        f'<b>Classe Predita:</b> {map_cls.get(c_orig)} &rarr;'
+                        f' {map_cls.get(c_dest)}<br>'
+                        f'<b>Assertividade:</b> {status_assert}<br>'
+                        f'<b>Qtd Instâncias:</b> {row["qtd_instancias"]}<br>'
+                        f'<b>Exemplo ID:</b> #{row["exemplo_instancia"]}<br>'
+                        f'<b>Confiança Média:</b> {conf*100:.1f}%<br>'
+                        f'<b>Importância Média XAI:</b>'
+                        f' {row["importancia_media"]:.4f}'
                     )
                     hover_texts.append(hover_text)
+
+            subtitulo_sankey = (
+                ' | Cores: Verde (Acerto Mantido/Corrigido), Âmbar (Novo Erro), Vermelho (Erro Persistente)'
+                if cor_sankey_sel == 'assertividade'
+                else ''
+            )
 
             fig_sankey = go.Figure(
                 data=[
@@ -2461,7 +2495,7 @@ def update_all_graphs(
                 title_text=(
                     'Transições Temporais de Explicações'
                     f' ({"MÉDIA GERAL" if m_alvo == METODO_COMBINADO else m_alvo})'
-                    f' - {label_ds}'
+                    f' - {label_ds}{subtitulo_sankey}'
                 ),
                 font_size=12,
                 margin=dict(l=20, r=20, t=50, b=20),
